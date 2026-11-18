@@ -183,7 +183,7 @@ test('install preserves an existing factory command', () => {
   const command = path.join(home, '.local', 'bin', 'factory')
   fs.mkdirSync(path.dirname(command), { recursive: true })
   fs.writeFileSync(command, 'mine')
-  const output = execFileSync('bash', [path.resolve(import.meta.dirname, '..', '..', 'install.sh')], { encoding: 'utf8', env: { ...process.env, HOME: home } })
+  const output = execFileSync('bash', [path.resolve(import.meta.dirname, '..', 'install.sh')], { encoding: 'utf8', env: { ...process.env, HOME: home } })
   assert.equal(fs.readFileSync(command, 'utf8'), 'mine')
   assert.match(output, /SKIP \(not a symlink\).*factory/)
 })
@@ -193,7 +193,7 @@ test('uninstall removes the factory command linked into this repository', () => 
   const command = path.join(home, '.local', 'bin', 'factory')
   fs.mkdirSync(path.dirname(command), { recursive: true })
   fs.symlinkSync(path.resolve(import.meta.dirname, '..', 'bin', 'factory.ts'), command)
-  execFileSync('bash', [path.resolve(import.meta.dirname, '..', '..', 'uninstall.sh')], { env: { ...process.env, HOME: home } })
+  execFileSync('bash', [path.resolve(import.meta.dirname, '..', 'uninstall.sh')], { env: { ...process.env, HOME: home } })
   assert.equal(fs.existsSync(command), false)
 })
 
