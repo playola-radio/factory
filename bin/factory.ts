@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
@@ -32,6 +33,15 @@ const USAGE = `Usage:
 
 const HOME = process.env.FACTORY_HOME || path.join(os.homedir(), '.factory')
 const SCHEMAS_DIR = path.join(import.meta.dirname, '..', 'schemas')
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
 
 async function finalize(repoArg: string, numberArg: string | undefined, options: Record<string, string | undefined>) {
   const repo = path.resolve(repoArg)
@@ -83,6 +93,12 @@ async function main() {
     }
     const base = values.base || world.store.claimFor(world.repoId)?.base || 'develop'
     const buildDir = path.join(HOME, 'worktrees', world.repoId.replaceAll('/', '__'))
+    const lock = path.join(buildDir, 'build.pid')
+    const running = fs.existsSync(lock) && Number(fs.readFileSync(lock, 'utf8'))
+    if (running && isAlive(running)) throw new Error(`A factory build is already running on ${world.repoId} (process ${running}).`)
+    fs.mkdirSync(buildDir, { recursive: true })
+    fs.writeFileSync(lock, String(process.pid))
+    process.on('exit', () => fs.rmSync(lock, { force: true }))
     for (;;) {
       const report = startOrResume(baseView(repo, buildDir, base), world, base)
       if (report.state !== 'started' && report.state !== 'already in progress') {
@@ -92,7 +108,7 @@ async function main() {
       }
       const runDir = path.join(HOME, 'runs', `${path.basename(repo)}-${report.design}-build`)
       console.error(`${report.state}: ${report.design} on ${base}. Agent traces: ${runDir}/traces`)
-      const pr = await buildDesign(report.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, values.model || DEFAULT_MODEL.claude))
+      const pr = await buildDesign(report.claim.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, values.model || DEFAULT_MODEL.claude))
       console.log(JSON.stringify({ design: report.design, base, ...pr }, null, 2))
       if (pr.state !== 'all PRs merged') {
         process.exitCode = 2

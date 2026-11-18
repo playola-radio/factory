@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { isDeepStrictEqual } from 'node:util'
 
 import { readDesign } from './design.ts'
 import { designStatuses, readApprovedPlan } from './readiness.ts'
@@ -13,7 +14,7 @@ export interface World {
 }
 
 export type BuildReport =
-  | { state: 'started' | 'already in progress'; design: string; claim: Claim; prs: PlannedPr[] }
+  | { state: 'started' | 'already in progress'; design: string; claim: Claim }
   | { state: 'not buildable' | 'refused'; design: string; reasons: string[] }
   | { state: 'nothing to build' }
 
@@ -25,7 +26,10 @@ export function startOrResume(repo: string, world: World, base: string): BuildRe
   if (existing && existing.base !== base) {
     throw new Error(`${existing.design} is in progress on base ${existing.base}, not ${base}; abandon it first to change the base.`)
   }
-  if (existing) return { state: 'already in progress', design: existing.design, claim: existing, prs: prsOf(existing.design) }
+  if (existing && !isDeepStrictEqual(prsOf(existing.design), existing.prs)) {
+    return { state: 'refused', design: existing.design, reasons: ['The implementation plan changed after this build started; abandon the build to start again from the new plan.'] }
+  }
+  if (existing) return { state: 'already in progress', design: existing.design, claim: existing }
 
   const [next] = designStatuses(repo)
   if (!next) return { state: 'nothing to build' }
@@ -40,18 +44,18 @@ export function startOrResume(repo: string, world: World, base: string): BuildRe
     }
   }
 
-  const claim: Claim = { repo: world.repoId, design: next.design, base, startedAt: world.now() }
+  const claim: Claim = { repo: world.repoId, design: next.design, base, startedAt: world.now(), prs: prsOf(next.design) }
   world.store.claim(claim)
   world.store.record({ at: claim.startedAt, repo: claim.repo, design: claim.design, type: 'design claimed' })
-  return { state: 'started', design: next.design, claim, prs: prsOf(next.design) }
+  return { state: 'started', design: next.design, claim }
 }
 
-export function abandon(world: World): { state: 'abandoned'; design: string } | { state: 'nothing in progress' } {
+export function abandon(world: World): { state: 'abandoned'; design: string; deleteBeforeBuildingAgain: string[] } | { state: 'nothing in progress' } {
   const claim = world.store.claimFor(world.repoId)
   if (!claim) return { state: 'nothing in progress' }
   world.store.release(world.repoId)
   world.store.record({ at: world.now(), repo: claim.repo, design: claim.design, type: 'design abandoned' })
-  return { state: 'abandoned', design: claim.design }
+  return { state: 'abandoned', design: claim.design, deleteBeforeBuildingAgain: world.remoteBranches(branchPrefix(claim.design)) }
 }
 
 export function finish(world: World): void {

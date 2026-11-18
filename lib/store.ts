@@ -1,11 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import type { PlannedPr } from './types.ts'
+
 export interface Claim {
   repo: string
   design: string
   base: string
   startedAt: string
+  prs: PlannedPr[]
 }
 
 export interface FactoryEvent {

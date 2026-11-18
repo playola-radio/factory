@@ -13,7 +13,7 @@ import { buildDesign, buildNextPr } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
-import type { FixWave, Implementation, ReviewWave } from '../lib/store.ts'
+import type { Claim, FixWave, Implementation, ReviewWave } from '../lib/store.ts'
 
 function addDesign(repo: string, name: string, planned: boolean) {
   const dir = path.join(repo, 'designs', 'ready', name)
@@ -47,7 +47,7 @@ test('starts the lowest-numbered design and lists its PRs', () => {
   const report = startOrResume(repo, world, 'develop')
   assert.equal(report.state, 'started')
   assert.equal(report.state === 'started' && report.design, '001-first')
-  assert.equal(report.state === 'started' && report.prs.length, 1)
+  assert.equal(report.state === 'started' && report.claim.prs.length, 1)
   assert.deepEqual(events(), ['design claimed'])
 })
 
@@ -83,14 +83,31 @@ test('reports nothing to build when designs/ready is empty', () => {
 test('abandoning frees the repo for the next build', () => {
   const { repo, world, events } = setup([['001-first', true]])
   startOrResume(repo, world, 'develop')
-  assert.deepEqual(abandon(world), { state: 'abandoned', design: '001-first' })
+  assert.deepEqual(abandon(world), { state: 'abandoned', design: '001-first', deleteBeforeBuildingAgain: [] })
   assert.equal(startOrResume(repo, world, 'develop').state, 'started')
   assert.deepEqual(events(), ['design claimed', 'design abandoned', 'design claimed'])
 })
 
+test('abandoning names the branches left on GitHub', () => {
+  const { repo, world } = setup([['001-first', true]])
+  startOrResume(repo, world, 'develop')
+  const report = abandon({ ...world, remoteBranches: () => ['factory/001-first/pr-1'] })
+  assert.deepEqual(report, { state: 'abandoned', design: '001-first', deleteBeforeBuildingAgain: ['factory/001-first/pr-1'] })
+})
+
+test('a build is not resumed once its plan has changed', () => {
+  const { repo, world } = setup([['001-first', true]])
+  const started = startOrResume(repo, world, 'develop')
+  assert.equal(started.state, 'started')
+  world.store.release('owner/app')
+  world.store.claim({ ...(started as { claim: Claim }).claim, prs: [] })
+  const again = startOrResume(repo, world, 'develop')
+  assert.match(again.state === 'refused' ? again.reasons[0] : '', /plan changed after this build started/)
+})
+
 test('a second claim on the same repo is rejected', () => {
   const { world } = setup([])
-  const claim = { repo: 'owner/app', design: '001-first', base: 'develop', startedAt: 'now' }
+  const claim = { repo: 'owner/app', design: '001-first', base: 'develop', startedAt: 'now', prs: [] }
   world.store.claim(claim)
   assert.throws(() => world.store.claim({ ...claim, design: '002-second' }), /already has a design in progress: 001-first/)
 })
@@ -256,8 +273,8 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     },
     wait: async () => void (did.waits += 1),
   }
-  const build = () => buildNextPr(started.prs, started.claim, world, workshop)
-  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.prs, started.claim, world, workshop) }
+  const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop)
+  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
