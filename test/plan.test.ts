@@ -112,6 +112,12 @@ test('a design edited during the review is not marked finished', async () => {
   assert.equal(buildable(), false)
 })
 
+test('a design file added during the review is not marked finished', async () => {
+  const { dir, finalize, buildable } = repoWithPlan(HAND_WRITTEN)
+  await assert.rejects(finalize([], () => fs.writeFileSync(path.join(dir, 'ApiContract.md'), '# API\n')), /changed while it was being reviewed/)
+  assert.equal(buildable(), false)
+})
+
 test('finalizing again after a finished plan was edited reviews the edited plan', async () => {
   const { dir, finalize, reviews, buildable } = repoWithPlan(HAND_WRITTEN)
   await finalize()

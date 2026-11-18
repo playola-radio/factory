@@ -65,7 +65,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     const unanswered = github.items.filter((item) => !review.answered.includes(item.id))
     if (github.approved && github.checks === 'passed' && !github.conflicts) {
-      workshop.merge(number)
+      workshop.merge(number, github.head)
       const questions = unanswered.filter((item) => item.fromOwner)
       if (questions.length > 0) {
         for (const { item, reply } of await ask(questions, [], 'merged', github.head)) if (reply) workshop.reply(number, item, reply.reply, false)
@@ -80,7 +80,8 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     const botsToo = review.rounds.filter((round) => round.forBots).length < MAX_BOT_ROUNDS
     const items = unanswered.filter((item) => item.fromOwner || botsToo)
-    const failedChecks = botsToo && !review.rounds.some((round) => round.head === github.head) ? github.failedChecks : []
+    const handledHeads = review.rounds.filter((round) => round.blockers.length === 0 && round.checks.every((check) => check.passed)).map((round) => round.head)
+    const failedChecks = botsToo && !handledHeads.includes(github.head) ? github.failedChecks : []
     if (items.length === 0 && failedChecks.length === 0 && !conflicts) {
       if (!toldOwner) record('pr waiting on owner')
       toldOwner = true

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,6 +10,7 @@ import type { World } from '../lib/build.ts'
 import { readDesign } from '../lib/design.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildDesign, buildNextPr } from '../lib/implement.ts'
+import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
 import type { FixWave, Implementation, ReviewWave } from '../lib/store.ts'
@@ -98,6 +100,86 @@ test('the repository is identified the same way from either kind of address', ()
   assert.equal(repoIdFromRemote('https://github.com/owner/app'), 'owner/app')
 })
 
+function workshopWithGitHubResponse(response: object) {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-gh-'))
+  const gh = path.join(bin, 'gh')
+  fs.writeFileSync(gh, `#!/usr/bin/env node
+if (process.argv[2] === 'auth') process.stdout.write('token')
+else process.stdout.write(process.env.FACTORY_GH_RESPONSE)
+`)
+  fs.chmodSync(gh, 0o755)
+  const previousPath = process.env.PATH
+  const previousResponse = process.env.FACTORY_GH_RESPONSE
+  process.env.PATH = `${bin}:${previousPath}`
+  process.env.FACTORY_GH_RESPONSE = JSON.stringify(response)
+  const workshop = realWorkshop('/tmp/repo', 'owner/app', '/tmp/worktrees', '/tmp/runs', 'model')
+  return {
+    workshop,
+    restore() {
+      process.env.PATH = previousPath
+      if (previousResponse === undefined) delete process.env.FACTORY_GH_RESPONSE
+      else process.env.FACTORY_GH_RESPONSE = previousResponse
+    },
+  }
+}
+
+function githubResponse(overrides: Record<string, unknown> = {}) {
+  return { data: { repository: { pullRequest: {
+    state: 'OPEN', headRefOid: 'abc', mergeable: 'MERGEABLE',
+    reviews: { nodes: [] }, comments: { nodes: [] }, reviewThreads: { nodes: [] },
+    commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: [] } } } }] },
+    ...overrides,
+  } } } }
+}
+
+test('startup failures and stale checks fail the pull request', { concurrency: false }, () => {
+  const { workshop, restore } = workshopWithGitHubResponse(githubResponse({
+    commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: [
+      { name: 'boot', status: 'COMPLETED', conclusion: 'STARTUP_FAILURE' },
+      { name: 'old', status: 'COMPLETED', conclusion: 'STALE' },
+    ] } } } }] },
+  }))
+  try {
+    const state = workshop.pullRequestState(8)
+    assert.equal(state.checks, 'failed')
+    assert.deepEqual(state.failedChecks, ['boot', 'old'])
+  } finally {
+    restore()
+  }
+})
+
+test('owner reviews and comments keep their globally unique IDs', { concurrency: false }, () => {
+  const owner = { login: 'briankeane' }
+  const { workshop, restore } = workshopWithGitHubResponse(githubResponse({
+    reviews: { nodes: [{ id: 'review-id', databaseId: 5, author: owner, state: 'COMMENTED', body: 'review', commit: { oid: 'abc' } }] },
+    comments: { nodes: [{ id: 'comment-id', databaseId: 5, author: owner, body: 'comment' }] },
+  }))
+  try {
+    assert.deepEqual(workshop.pullRequestState(8).items.map((item) => item.id), ['comment-id', 'review-id'])
+  } finally {
+    restore()
+  }
+})
+
+test('install preserves an existing factory command', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-install-'))
+  const command = path.join(home, '.local', 'bin', 'factory')
+  fs.mkdirSync(path.dirname(command), { recursive: true })
+  fs.writeFileSync(command, 'mine')
+  const output = execFileSync('bash', [path.resolve(import.meta.dirname, '..', '..', 'install.sh')], { encoding: 'utf8', env: { ...process.env, HOME: home } })
+  assert.equal(fs.readFileSync(command, 'utf8'), 'mine')
+  assert.match(output, /SKIP \(not a symlink\).*factory/)
+})
+
+test('uninstall removes the factory command linked into this repository', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-uninstall-'))
+  const command = path.join(home, '.local', 'bin', 'factory')
+  fs.mkdirSync(path.dirname(command), { recursive: true })
+  fs.symlinkSync(path.resolve(import.meta.dirname, '..', 'bin', 'factory.ts'), command)
+  execFileSync('bash', [path.resolve(import.meta.dirname, '..', '..', 'uninstall.sh')], { env: { ...process.env, HOME: home } })
+  assert.equal(fs.existsSync(command), false)
+})
+
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
 async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean } = {}) {
@@ -115,7 +197,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const github = [...(options.github ?? [{ approved: true }])]
   const reviewPrompts: string[] = []
   const replies: { id: string; body: string; resolved: boolean }[] = []
-  const did = { pushed: 0, reReviews: 0, merged: 0, waits: 0, evidencePosts: 0 }
+  const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, evidencePosts: 0 }
   const steps: string[] = []
   let head = 'abc'
   const workshop: Workshop = {
@@ -168,7 +250,10 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     acknowledge: (item) => void steps.push(`eyes on ${item.id}`),
     reply: (_number, item, body, resolved) => void replies.push({ id: item.id, body, resolved }),
     requestReview: () => void (did.reReviews += 1),
-    merge: () => void (did.merged += 1),
+    merge: (_number, observedHead?: string) => {
+      did.merged += 1
+      did.mergedHeads.push(observedHead)
+    },
     wait: async () => void (did.waits += 1),
   }
   const build = () => buildNextPr(started.prs, started.claim, world, workshop)
@@ -355,6 +440,11 @@ test('an approved PR with passing checks is merged, and the design goes on until
   assert.deepEqual(await design(), { state: 'all PRs merged' })
 })
 
+test('an approved PR is merged only at the head that was observed', async () => {
+  const { did } = await buildPr({ github: [{ approved: true }] })
+  assert.deepEqual(did.mergedHeads, ['abc'])
+})
+
 test('a PR the owner has not approved is never merged', async () => {
   const { report, did, events } = await buildPr({ github: [{}, {}, { state: 'closed' }] })
   assert.equal(did.merged, 0)
@@ -378,7 +468,7 @@ test("a bot's finding is fixed, pushed, answered in its thread, resolved, and re
   const { report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptileScore: 0 }, { approved: true }] })
   assert.match(reviewPrompts[0], /\*\*R1\*\* \[bot\] `App.swift:9`\n  > greptile-apps: this breaks a repo rule/)
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
-  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, waits: 0, evidencePosts: 0 })
+  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, evidencePosts: 0 })
   assert.equal(reviewState(report), 'merged')
 })
 
@@ -424,6 +514,13 @@ test('a review fix that leaves a check failing is not pushed or posted, and the 
   assert.deepEqual('review' in report && report.review?.problems, ['Check failed: make lint'])
   assert.deepEqual([did.pushed, replies.length], [0, 0])
   assert.equal(events().at(-1), 'pr needs attention')
+  await build()
+  assert.equal(reviewPrompts.length, 2)
+})
+
+test('a failed check repair is retried on the same GitHub commit', async () => {
+  const failed = { head: 'abc', checks: 'failed' as const, failedChecks: ['make lint'] }
+  const { build, reviewPrompts } = await buildPr({ github: [failed, failed, { state: 'closed' }], answer: { checks: [{ command: 'make lint', passed: false }] } })
   await build()
   assert.equal(reviewPrompts.length, 2)
 })

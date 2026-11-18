@@ -65,7 +65,7 @@ export interface Workshop {
   acknowledge(item: ReviewItem): void
   reply(number: number, item: ReviewItem, body: string, resolve: boolean): void
   requestReview(number: number): void
-  merge(number: number): void
+  merge(number: number, head: string): void
   wait(): Promise<void>
 }
 
@@ -202,7 +202,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       const checks: { name?: string; context?: string; status?: string; conclusion?: string; state?: string }[] = pr.commits.nodes[0].commit.statusCheckRollup?.contexts.nodes ?? []
       const pending = checks.some((check) => (check.status ?? 'COMPLETED') !== 'COMPLETED' || ['PENDING', 'EXPECTED'].includes(check.state ?? ''))
       const failedChecks = checks
-        .filter((check) => ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'ERROR'].includes(check.conclusion ?? check.state ?? ''))
+        .filter((check) => ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'ERROR', 'STARTUP_FAILURE', 'STALE'].includes(check.conclusion ?? check.state ?? ''))
         .map((check) => check.name ?? check.context ?? 'a check')
         .filter((check) => !/greptile/i.test(check))
       const login = (node: { author: { login: string } | null }) => node.author?.login ?? ''
@@ -220,7 +220,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
         }))
       const comments: ReviewItem[] = [...pr.comments.nodes, ...pr.reviews.nodes]
         .filter((comment: any) => login(comment) === OWNER && comment.body.trim() !== '')
-        .map((comment: any) => ({ id: `comment-${comment.databaseId}`, kind: 'comment', latest: comment.id, fromOwner: true, text: comment.body }))
+        .map((comment: any) => ({ id: comment.id, kind: 'comment', latest: comment.id, fromOwner: true, text: comment.body }))
       return {
         state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open',
         head: pr.headRefOid,
@@ -243,7 +243,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       if (resolve) gh('api', 'graphql', '-f', 'query=mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{id}}}', '-f', `thread=${item.id}`)
     },
     requestReview: (number) => void gh('pr', 'comment', String(number), '-R', repoId, '--body', '@greptile review this'),
-    merge: (number) => void gh('pr', 'merge', String(number), '-R', repoId, '--merge'),
+    merge: (number, head) => void gh('pr', 'merge', String(number), '-R', repoId, '--merge', '--match-head-commit', head),
     wait: () => new Promise((resolve) => setTimeout(resolve, POLL_MS)),
   }
 }

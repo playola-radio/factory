@@ -1,5 +1,6 @@
 import { checkPlan, parsePlan, renderPlan, tidyPlan } from './plan.ts'
 import type { PlanContent } from './plan.ts'
+import { readDesign } from './design.ts'
 import { designHash, PLAN_FILE, readPlanBody, recordApprovedPlan } from './readiness.ts'
 import type { Design, Finding, Review } from './types.ts'
 
@@ -28,7 +29,8 @@ export async function finalizePlan(
 
   const reviewedDesign = designHash(repo, design)
   const { findings } = await review(renderPlan(plan, design))
-  if (designHash(repo, design) !== reviewedDesign || readPlanBody(repo, design) !== written) {
+  const currentDesign = readDesign(repo, design.name.slice(0, 3))
+  if (designHash(repo, currentDesign) !== reviewedDesign || readPlanBody(repo, currentDesign) !== written) {
     throw new Error('The design or the plan changed while it was being reviewed; run "factory finalize" again.')
   }
   if (findings.some((finding) => BLOCKING.includes(finding.severity))) return { state: 'review found problems', findings }
