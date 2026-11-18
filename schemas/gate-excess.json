@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["where", "delete", "breaks"],
+        "properties": {
+          "where": { "type": "string" },
+          "delete": { "type": "string" },
+          "breaks": { "type": "string" }
+        }
+      }
+    }
+  }
+}

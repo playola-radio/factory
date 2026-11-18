@@ -1,0 +1,10 @@
+{
+  "name": "factory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Turns a finished design folder into an implementation plan, then (later) into reviewed PRs.",
+  "bin": { "factory": "bin/factory.ts" },
+  "scripts": { "test": "node --test" },
+  "engines": { "node": ">=24" }
+}
