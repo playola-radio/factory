@@ -23,6 +23,8 @@ export interface ExcessFinding {
 export interface ReviewItem {
   id: string
   kind: 'thread' | 'comment'
+  // The GitHub comment a reaction goes on.
+  latest: string
   fromOwner: boolean
   where?: string
   text: string
@@ -53,9 +55,14 @@ export interface Workshop {
   // Moves the design to designs/done in one commit; false when it is already there.
   markDesignBuilt(worktree: string, design: string): boolean
   openPullRequest(worktree: string, branch: string, base: string, title: string, body: string): PullRequest
+  // Changes whenever evidence is recorded again.
+  evidenceStamp(worktree: string): string
+  publishEvidence(worktree: string, number: number): void
   pullRequestState(number: number): PullRequestState
   answerReview(worktree: string, prompt: string, step: string): Promise<ReviewWave>
   push(worktree: string, branch: string): void
+  // Marks a comment as seen with an eyes reaction.
+  acknowledge(item: ReviewItem): void
   reply(number: number, item: ReviewItem, body: string, resolve: boolean): void
   requestReview(number: number): void
   merge(number: number): void
@@ -106,9 +113,9 @@ const gh = (...args: string[]) => execFileSync('gh', args, asAuthor(process.cwd(
 
 const STATE_QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){
   state headRefOid mergeable
-  reviews(last:100){nodes{databaseId author{login} state body commit{oid}}}
-  comments(last:100){nodes{databaseId author{login} body}}
-  reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{author{login} body}}}}
+  reviews(last:100){nodes{id databaseId author{login} state body commit{oid}}}
+  comments(last:100){nodes{id databaseId author{login} body}}
+  reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{id author{login} body}}}}
   commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}
 }}}`
 
@@ -173,10 +180,17 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       const existing = JSON.parse(gh('pr', 'list', '-R', repoId, '--head', branch, '--state', 'open', '--json', 'number,url'))[0] as PullRequest | undefined
       const url = existing?.url ?? gh('pr', 'create', '-R', repoId, '--head', branch, '--base', base, '--title', title, '--body', body)
       const pullRequest = { number: Number(url.split('/').pop()), url }
-      if (/^ux-evidence-publish:/m.test(fs.readFileSync(path.join(worktree, 'Makefile'), { encoding: 'utf8', flag: 'a+' }))) {
-        execFileSync('make', ['ux-evidence-publish', `PR=${pullRequest.number}`], options)
-      }
+      this.publishEvidence(worktree, pullRequest.number)
       return pullRequest
+    },
+    evidenceStamp(worktree) {
+      const artifacts = path.join(worktree, '.qa-artifacts')
+      if (!fs.existsSync(artifacts)) return ''
+      return fs.readdirSync(artifacts).sort().map((id) => path.join(artifacts, id, 'result.json')).filter((file) => fs.existsSync(file)).map((file) => fs.readFileSync(file, 'utf8')).join('\n')
+    },
+    publishEvidence(worktree, number) {
+      if (!/^ux-evidence-publish:/m.test(fs.readFileSync(path.join(worktree, 'Makefile'), { encoding: 'utf8', flag: 'a+' }))) return
+      execFileSync('make', ['ux-evidence-publish', `PR=${number}`], asAuthor(worktree))
     },
     push(worktree, branch) {
       execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], asAuthor(worktree))
@@ -198,13 +212,14 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
         .map((thread: any) => ({
           id: thread.id,
           kind: 'thread',
+          latest: thread.comments.nodes.at(-1).id,
           fromOwner: login(thread.comments.nodes[0]) === OWNER,
           where: `${thread.path}${thread.line ? `:${thread.line}` : ''}`,
           text: thread.comments.nodes.map((comment: any) => `${login(comment)}: ${comment.body}`).join('\n\n'),
         }))
       const comments: ReviewItem[] = [...pr.comments.nodes, ...pr.reviews.nodes]
         .filter((comment: any) => login(comment) === OWNER && comment.body.trim() !== '')
-        .map((comment: any) => ({ id: `comment-${comment.databaseId}`, kind: 'comment', fromOwner: true, text: comment.body }))
+        .map((comment: any) => ({ id: `comment-${comment.databaseId}`, kind: 'comment', latest: comment.id, fromOwner: true, text: comment.body }))
       return {
         state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open',
         head: pr.headRefOid,
@@ -217,6 +232,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       }
     },
     answerReview: (worktree, prompt, step) => writer('review-fix', worktree, prompt, step) as Promise<ReviewWave>,
+    acknowledge: (item) => void gh('api', 'graphql', '-f', 'query=mutation($subject:ID!){addReaction(input:{subjectId:$subject,content:EYES}){reaction{id}}}', '-f', `subject=${item.latest}`),
     reply(number, item, body, resolve) {
       if (item.kind === 'comment') {
         gh('pr', 'comment', String(number), '-R', repoId, '--body', `> ${item.text.split('\n')[0]}\n\n${body}`)

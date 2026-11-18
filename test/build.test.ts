@@ -100,7 +100,7 @@ test('the repository is identified the same way from either kind of address', ()
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered' } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -115,7 +115,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const github = [...(options.github ?? [{ approved: true }])]
   const reviewPrompts: string[] = []
   const replies: { id: string; body: string; resolved: boolean }[] = []
-  const did = { pushed: 0, reReviews: 0, merged: 0, waits: 0 }
+  const did = { pushed: 0, reReviews: 0, merged: 0, waits: 0, evidencePosts: 0 }
   const steps: string[] = []
   let head = 'abc'
   const workshop: Workshop = {
@@ -154,6 +154,8 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       opened.push({ branch, base, title, body })
       return { number: 7, url: 'https://github.com/owner/app/pull/7' }
     },
+    evidenceStamp: () => (options.reRecords ? head : 'same'),
+    publishEvidence: () => void (did.evidencePosts += 1),
     pullRequestState: () => ({ state: 'open', head, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptileScore: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
     answerReview: async (_worktree, prompt) => {
       reviewPrompts.push(prompt)
@@ -163,6 +165,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       return { summary: 'answered', replies: ids.map((id) => ({ id, action, reply: `reply to ${id}` })), checks: [], blockers: [], ...options.answer }
     },
     push: () => void (did.pushed += 1),
+    acknowledge: (item) => void steps.push(`eyes on ${item.id}`),
     reply: (_number, item, body, resolved) => void replies.push({ id: item.id, body, resolved }),
     requestReview: () => void (did.reReviews += 1),
     merge: () => void (did.merged += 1),
@@ -341,9 +344,9 @@ test('a PR implemented before the gate existed goes through the gate without bei
 })
 
 const reviewState = (report: Awaited<ReturnType<typeof buildNextPr>>) => ('review' in report ? report.review?.state : undefined)
-const BOT_THREAD: ReviewItem = { id: 'T1', kind: 'thread', fromOwner: false, where: 'App.swift:9', text: 'greptile-apps: this breaks a repo rule' }
-const OWNER_THREAD: ReviewItem = { id: 'T2', kind: 'thread', fromOwner: true, where: 'App.swift:3', text: 'briankeane: Why not in the other file?' }
-const OWNER_COMMENT: ReviewItem = { id: 'comment-5', kind: 'comment', fromOwner: true, text: 'Rename the button please' }
+const BOT_THREAD: ReviewItem = { id: 'T1', kind: 'thread', latest: 'c1', fromOwner: false, where: 'App.swift:9', text: 'greptile-apps: this breaks a repo rule' }
+const OWNER_THREAD: ReviewItem = { id: 'T2', kind: 'thread', latest: 'c1', fromOwner: true, where: 'App.swift:3', text: 'briankeane: Why not in the other file?' }
+const OWNER_COMMENT: ReviewItem = { id: 'comment-5', kind: 'comment', latest: 'c1', fromOwner: true, text: 'Rename the button please' }
 
 test('an approved PR with passing checks is merged, and the design goes on until every PR is merged', async () => {
   const { report, did, design } = await buildPr()
@@ -375,7 +378,7 @@ test("a bot's finding is fixed, pushed, answered in its thread, resolved, and re
   const { report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptileScore: 0 }, { approved: true }] })
   assert.match(reviewPrompts[0], /\*\*R1\*\* \[bot\] `App.swift:9`\n  > greptile-apps: this breaks a repo rule/)
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
-  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, waits: 0 })
+  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, waits: 0, evidencePosts: 0 })
   assert.equal(reviewState(report), 'merged')
 })
 
@@ -462,4 +465,19 @@ test('finishing a design frees the repo and forgets its PRs, so the next design 
   assert.equal(world.store.claimFor('owner/app'), null)
   assert.equal(world.store.prReport('owner/app', 1), null)
   assert.equal(events().at(-1), 'design finished')
+})
+
+test('evidence recorded again during a fix is posted to the PR after the push', async () => {
+  const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }], reRecords: true })
+  assert.deepEqual([did.pushed, did.evidencePosts], [1, 1])
+})
+
+test('a fix that records nothing new posts no evidence', async () => {
+  const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }] })
+  assert.deepEqual([did.pushed, did.evidencePosts], [1, 0])
+})
+
+test("the owner's comment gets an eyes reaction before work on it starts, and a bot's does not", async () => {
+  const { steps } = await buildPr({ github: [{ items: [OWNER_THREAD, BOT_THREAD] }, { approved: true }] })
+  assert.deepEqual(steps.filter((step) => step.startsWith('eyes')), [`eyes on ${OWNER_THREAD.id}`])
 })
