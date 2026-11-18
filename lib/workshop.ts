@@ -3,8 +3,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { DEFAULT_MODEL, runAgent } from './agents.ts'
-import { designStatuses } from './readiness.ts'
-import type { FixWave, Implementation, PullRequest } from './store.ts'
+import { readDesign } from './design.ts'
+import { reasonsNotBuildable } from './readiness.ts'
+import type { FixWave, Implementation, PullRequest, ReviewWave } from './store.ts'
 
 export interface BreakFinding {
   severity: 'P0' | 'P1' | 'P2' | 'P3'
@@ -18,6 +19,26 @@ export interface ExcessFinding {
   breaks: string
 }
 
+// One unresolved review thread that is waiting on the author, or one top-level comment from the owner.
+export interface ReviewItem {
+  id: string
+  kind: 'thread' | 'comment'
+  fromOwner: boolean
+  where?: string
+  text: string
+}
+
+export interface PullRequestState {
+  state: 'open' | 'merged' | 'closed'
+  head: string
+  approved: boolean
+  conflicts: boolean
+  checks: 'pending' | 'passed' | 'failed'
+  failedChecks: string[]
+  greptileScore: number | null
+  items: ReviewItem[]
+}
+
 export interface Workshop {
   prepareWorktree(base: string, branch: string): string
   mergeBase(worktree: string, base: string): 'merged' | 'conflicts'
@@ -29,11 +50,25 @@ export interface Workshop {
   linesChanged(worktree: string, since: string): { added: number; deleted: number }
   commitMessages(worktree: string, base: string): string[]
   uncommittedFiles(worktree: string): string[]
+  // Moves the design to designs/done in one commit; false when it is already there.
+  markDesignBuilt(worktree: string, design: string): boolean
   openPullRequest(worktree: string, branch: string, base: string, title: string, body: string): PullRequest
+  pullRequestState(number: number): PullRequestState
+  answerReview(worktree: string, prompt: string, step: string): Promise<ReviewWave>
+  push(worktree: string, branch: string): void
+  reply(number: number, item: ReviewItem, body: string, resolve: boolean): void
+  requestReview(number: number): void
+  merge(number: number): void
+  wait(): Promise<void>
 }
 
-export const planIsIntact = (worktree: string, design: string) =>
-  designStatuses(worktree).some((status) => status.design === design && status.buildable)
+export function planIsIntact(worktree: string, design: string): boolean {
+  try {
+    return reasonsNotBuildable(worktree, readDesign(worktree, design.slice(0, 3))).length === 0
+  } catch {
+    return false
+  }
+}
 
 export function branchProblems(workshop: Workshop, worktree: string, base: string, design: string): string[] {
   const commits = workshop.commitMessages(worktree, base)
@@ -52,6 +87,10 @@ const schema = (name: string) => path.join(import.meta.dirname, '..', 'schemas',
 
 // The account that authors the factory's commits and opens its PRs, so the owner can review and approve them.
 const AUTHOR = { login: 'marge-watson', name: 'Marge', email: '263082108+marge-watson@users.noreply.github.com' }
+// The only account whose approval lets a PR merge.
+const OWNER = 'briankeane'
+const GREPTILE = 'greptile-apps'
+const POLL_MS = 2 * 60 * 1000
 const AUTHOR_ENV = { GIT_AUTHOR_NAME: AUTHOR.name, GIT_AUTHOR_EMAIL: AUTHOR.email, GIT_COMMITTER_NAME: AUTHOR.name, GIT_COMMITTER_EMAIL: AUTHOR.email }
 
 function authorToken(): string {
@@ -60,6 +99,26 @@ function authorToken(): string {
   } catch {
     throw new Error(`gh is not signed in as ${AUTHOR.login}. Run: gh auth login, sign in as ${AUTHOR.login}, then gh auth switch to go back to your own account.`)
   }
+}
+
+const asAuthor = (cwd: string) => ({ cwd, encoding: 'utf8' as const, env: { ...process.env, GH_TOKEN: authorToken() } })
+const gh = (...args: string[]) => execFileSync('gh', args, asAuthor(process.cwd())).trim()
+
+const STATE_QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){
+  state headRefOid mergeable
+  reviews(last:100){nodes{databaseId author{login} state body commit{oid}}}
+  comments(last:100){nodes{databaseId author{login} body}}
+  reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{author{login} body}}}}
+  commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}
+}}}`
+
+// A factory-owned checkout of the base branch as GitHub has it, so picking the next design never depends on the owner's checkout.
+export function baseView(repo: string, worktreesDir: string, base: string): string {
+  const view = path.join(worktreesDir, 'base')
+  git(repo, 'fetch', 'origin', base)
+  if (fs.existsSync(view)) git(view, 'checkout', '--detach', `origin/${base}`)
+  else git(repo, 'worktree', 'add', '--detach', view, `origin/${base}`)
+  return view
 }
 
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' }).trim()
@@ -100,10 +159,17 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     },
     commitMessages: (worktree, base) => git(worktree, 'log', '--format=%B%x00', `origin/${base}..HEAD`).split('\0').map((message) => message.trim()).filter(Boolean),
     uncommittedFiles: (worktree) => git(worktree, 'status', '--porcelain').split('\n').filter(Boolean),
+    markDesignBuilt(worktree, design) {
+      if (!fs.existsSync(path.join(worktree, 'designs', 'ready', design))) return false
+      fs.mkdirSync(path.join(worktree, 'designs', 'done'), { recursive: true })
+      git(worktree, 'mv', `designs/ready/${design}`, `designs/done/${design}`)
+      execFileSync('git', ['-C', worktree, 'commit', '-m', `chore: mark design ${design} as built`], { env: { ...process.env, ...AUTHOR_ENV } })
+      return true
+    },
     openPullRequest(worktree, branch, base, title, body) {
-      const options = { cwd: worktree, encoding: 'utf8' as const, env: { ...process.env, GH_TOKEN: authorToken() } }
+      const options = asAuthor(worktree)
       const gh = (...args: string[]) => execFileSync('gh', args, options).trim()
-      execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], options)
+      this.push(worktree, branch)
       const existing = JSON.parse(gh('pr', 'list', '-R', repoId, '--head', branch, '--state', 'open', '--json', 'number,url'))[0] as PullRequest | undefined
       const url = existing?.url ?? gh('pr', 'create', '-R', repoId, '--head', branch, '--base', base, '--title', title, '--body', body)
       const pullRequest = { number: Number(url.split('/').pop()), url }
@@ -112,5 +178,55 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       }
       return pullRequest
     },
+    push(worktree, branch) {
+      execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], asAuthor(worktree))
+    },
+    pullRequestState(number) {
+      const [owner, name] = repoId.split('/')
+      const pr = JSON.parse(gh('api', 'graphql', '-f', `query=${STATE_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${number}`)).data.repository.pullRequest
+      const checks: { name?: string; context?: string; status?: string; conclusion?: string; state?: string }[] = pr.commits.nodes[0].commit.statusCheckRollup?.contexts.nodes ?? []
+      const pending = checks.some((check) => (check.status ?? 'COMPLETED') !== 'COMPLETED' || ['PENDING', 'EXPECTED'].includes(check.state ?? ''))
+      const failedChecks = checks
+        .filter((check) => ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'ERROR'].includes(check.conclusion ?? check.state ?? ''))
+        .map((check) => check.name ?? check.context ?? 'a check')
+        .filter((check) => !/greptile/i.test(check))
+      const login = (node: { author: { login: string } | null }) => node.author?.login ?? ''
+      const verdict = pr.reviews.nodes.filter((review: any) => login(review) === OWNER && ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)).at(-1)
+      const greptile = pr.comments.nodes.filter((comment: any) => login(comment) === GREPTILE).at(-1)
+      const threads: ReviewItem[] = pr.reviewThreads.nodes
+        .filter((thread: any) => !thread.isResolved && login(thread.comments.nodes.at(-1)) !== AUTHOR.login)
+        .map((thread: any) => ({
+          id: thread.id,
+          kind: 'thread',
+          fromOwner: login(thread.comments.nodes[0]) === OWNER,
+          where: `${thread.path}${thread.line ? `:${thread.line}` : ''}`,
+          text: thread.comments.nodes.map((comment: any) => `${login(comment)}: ${comment.body}`).join('\n\n'),
+        }))
+      const comments: ReviewItem[] = [...pr.comments.nodes, ...pr.reviews.nodes]
+        .filter((comment: any) => login(comment) === OWNER && comment.body.trim() !== '')
+        .map((comment: any) => ({ id: `comment-${comment.databaseId}`, kind: 'comment', fromOwner: true, text: comment.body }))
+      return {
+        state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open',
+        head: pr.headRefOid,
+        approved: verdict?.state === 'APPROVED' && verdict.commit?.oid === pr.headRefOid,
+        conflicts: pr.mergeable === 'CONFLICTING',
+        checks: pending ? 'pending' : failedChecks.length > 0 ? 'failed' : 'passed',
+        failedChecks,
+        greptileScore: greptile ? Number(/Confidence Score: (\d)\/5/.exec(greptile.body)?.[1] ?? NaN) : null,
+        items: [...threads, ...comments],
+      }
+    },
+    answerReview: (worktree, prompt, step) => writer('review-fix', worktree, prompt, step) as Promise<ReviewWave>,
+    reply(number, item, body, resolve) {
+      if (item.kind === 'comment') {
+        gh('pr', 'comment', String(number), '-R', repoId, '--body', `> ${item.text.split('\n')[0]}\n\n${body}`)
+        return
+      }
+      gh('api', 'graphql', '-f', 'query=mutation($thread:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{id}}}', '-f', `thread=${item.id}`, '-f', `body=${body}`)
+      if (resolve) gh('api', 'graphql', '-f', 'query=mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{id}}}', '-f', `thread=${item.id}`)
+    },
+    requestReview: (number) => void gh('pr', 'comment', String(number), '-R', repoId, '--body', '@greptile review this'),
+    merge: (number) => void gh('pr', 'merge', String(number), '-R', repoId, '--merge'),
+    wait: () => new Promise((resolve) => setTimeout(resolve, POLL_MS)),
   }
 }

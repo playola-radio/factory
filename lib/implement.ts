@@ -4,6 +4,7 @@ import { branchPrefix } from './build.ts'
 import type { World } from './build.ts'
 import { readDesign } from './design.ts'
 import { runGate } from './gate.ts'
+import { watchPr } from './review.ts'
 import { designValues, renderPrompt } from './prompts.ts'
 import { readApprovedPlan } from './readiness.ts'
 import type { Claim, Implementation, PrReport } from './store.ts'
@@ -13,8 +14,8 @@ import type { Workshop } from './workshop.ts'
 
 export type PrBuildReport =
   | PrReport
-  | { state: 'all PRs opened' }
-  | { state: 'waiting' | 'stopped'; number: number; reason: string }
+  | { state: 'all PRs merged' }
+  | { state: 'stopped'; number: number; reason: string }
 
 const MAX_ATTEMPTS = 3
 
@@ -23,16 +24,33 @@ const MERGE_NOTE = {
   conflicts: 'Merging the latest `{base}` left conflicts. Resolve them first, keeping both sides\' intent, and commit the merge.',
 }
 
+// Builds PR after PR, each cut from the base branch once the one before it has merged there.
+export async function buildDesign(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop): Promise<PrBuildReport> {
+  for (;;) {
+    const report = await buildNextPr(prs, claim, world, workshop)
+    if (!('review' in report) || report.review?.state !== 'merged') return report
+  }
+}
+
 export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop): Promise<PrBuildReport> {
-  const pr = prs.find((planned) => !world.store.prReport(claim.repo, planned.number)?.pullRequest)
-  if (!pr) return { state: 'all PRs opened' }
+  const pr = prs.find((planned) => world.store.prReport(claim.repo, planned.number)?.review?.state !== 'merged')
+  if (!pr) return { state: 'all PRs merged' }
   const previous = world.store.prReport(claim.repo, pr.number)
-  const openPr = (gated: PrReport): PrReport => {
+  if (previous?.review?.state === 'closed') {
+    return { state: 'stopped', number: pr.number, reason: `PR ${pr.number} (${previous.pullRequest?.url}) was closed without being merged.` }
+  }
+  const last = pr === prs.at(-1)
+  if (previous?.pullRequest) {
+    if (last && workshop.markDesignBuilt(previous.worktree, claim.design)) workshop.push(previous.worktree, previous.branch)
+    return watchPr(pr, claim, previous, world, workshop)
+  }
+  const openPr = (gated: PrReport): Promise<PrReport> => {
+    if (last) workshop.markDesignBuilt(gated.worktree, claim.design)
     const body = pullRequestBody(gated, claim.design, pr.number, prs.length)
     const opened = { ...gated, pullRequest: workshop.openPullRequest(gated.worktree, gated.branch, claim.base, pr.title, body) }
     world.store.savePrReport(claim.repo, opened)
     world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type: 'pr opened' })
-    return opened
+    return watchPr(pr, claim, opened, world, workshop)
   }
   const gate = async (implemented: PrReport): Promise<PrReport> => {
     const gated = { ...implemented, gate: await runGate(pr, claim, implemented, world, workshop) }
@@ -48,9 +66,6 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   const attempts = previous?.attempts ?? (previous ? 1 : 0)
   if (previous && attempts >= MAX_ATTEMPTS) {
     return { state: 'stopped', number: pr.number, reason: `PR ${pr.number} still needs attention after ${attempts} attempts: ${previous.problems.join('; ')}. Its work is in ${previous.worktree}.` }
-  }
-  if (pr.dependsOn.length > 0) {
-    return { state: 'waiting', number: pr.number, reason: `PR ${pr.number} builds on PR ${pr.dependsOn.join(', ')}; building on an earlier PR is not written yet.` }
   }
 
   const branch = `${branchPrefix(claim.design)}pr-${pr.number}`

@@ -6,10 +6,10 @@ import { parseArgs } from 'node:util'
 import { DEFAULT_MODEL, NO_DELEGATION, OTHER_VENDOR, runAgent } from '../lib/agents.ts'
 import { readDesign } from '../lib/design.ts'
 import { finalizePlan } from '../lib/finalize.ts'
-import { abandon, realWorld, startOrResume } from '../lib/build.ts'
-import { buildNextPr } from '../lib/implement.ts'
+import { abandon, finish, realWorld, startOrResume } from '../lib/build.ts'
+import { buildDesign } from '../lib/implement.ts'
 import { diskStore } from '../lib/store.ts'
-import { realWorkshop } from '../lib/workshop.ts'
+import { baseView, realWorkshop } from '../lib/workshop.ts'
 import { designValues, renderPrompt } from '../lib/prompts.ts'
 import { designStatuses } from '../lib/readiness.ts'
 import type { Review, Vendor } from '../lib/types.ts'
@@ -19,11 +19,13 @@ const USAGE = `Usage:
                                   check ImplementationPlan.md, have the other vendor review it, and mark it finished
                                   (no number: the first design without a finished plan; --author is who wrote the plan)
   factory status <repo-path>      list designs/ready and say which have a finished plan and can be built
-  factory build <repo-path> [--base <branch>] [--model <id>]
-                                  start the next design (or continue the one in progress) and implement its next PR
+  factory build <repo-path> [--base <branch>] [--model <id>] [--one-design]
+                                  start the next design on the base branch as GitHub has it (or continue the one in progress) and implement its next PR
                                   in a fresh worktree, or finish one that needs attention (three attempts at most), then put it
                                   through the review gate (Codex tries to break it and audits it for excess, the implementer
-                                  fixes, three rounds at most), then push it and open its PR as marge-watson; --base is the branch its PRs go into (default develop)
+                                  fixes, three rounds at most), then push it and open its PR as marge-watson and stay with it: fix or answer what reviewers say, merge it once
+                                  the owner approves, and go on to the next PR and then the next design (the last PR moves its design to designs/done;
+                                  --one-design stops once the current design is finished); --base is the branch its PRs go into (default develop)
   factory abandon <repo-path>     give up the design in progress so the next build can start
 
   finalize exits 0 when the plan is finished, 2 when the plan needs fixing, 1 on an error.`
@@ -62,6 +64,7 @@ async function main() {
       author: { type: 'string' },
       base: { type: 'string' },
       model: { type: 'string' },
+      'one-design': { type: 'boolean' },
       'reviewer-model': { type: 'string' },
     },
   })
@@ -78,22 +81,29 @@ async function main() {
       console.log(JSON.stringify(abandon(world), null, 2))
       return
     }
-    const report = startOrResume(repo, world, values.base || world.store.claimFor(world.repoId)?.base || 'develop')
-    if (report.state !== 'started' && report.state !== 'already in progress') {
-      console.log(JSON.stringify(report, null, 2))
-      if (report.state !== 'nothing to build') process.exitCode = 1
-      return
-    }
+    const base = values.base || world.store.claimFor(world.repoId)?.base || 'develop'
     const buildDir = path.join(HOME, 'worktrees', world.repoId.replaceAll('/', '__'))
-    const runDir = path.join(HOME, 'runs', `${path.basename(repo)}-${report.design}-build`)
-    console.error(`${report.state}: ${report.design} on ${report.claim.base}. Agent traces: ${runDir}/traces`)
-    const pr = await buildNextPr(report.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, values.model || DEFAULT_MODEL.claude))
-    console.log(JSON.stringify({ design: report.design, base: report.claim.base, ...pr }, null, 2))
-    if (pr.state === 'needs attention' || pr.state === 'stopped' || ('gate' in pr && pr.gate?.state !== 'clean')) process.exitCode = 2
-    return
+    for (;;) {
+      const report = startOrResume(baseView(repo, buildDir, base), world, base)
+      if (report.state !== 'started' && report.state !== 'already in progress') {
+        console.log(JSON.stringify(report, null, 2))
+        if (report.state !== 'nothing to build') process.exitCode = 1
+        return
+      }
+      const runDir = path.join(HOME, 'runs', `${path.basename(repo)}-${report.design}-build`)
+      console.error(`${report.state}: ${report.design} on ${base}. Agent traces: ${runDir}/traces`)
+      const pr = await buildDesign(report.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, values.model || DEFAULT_MODEL.claude))
+      console.log(JSON.stringify({ design: report.design, base, ...pr }, null, 2))
+      if (pr.state !== 'all PRs merged') {
+        process.exitCode = 2
+        return
+      }
+      finish(world)
+      if (values['one-design']) return
+    }
   }
   if (command !== 'finalize' || rest.length < 1 || rest.length > 2) throw new Error(USAGE)
-  const report = await finalize(rest[0], rest[1], values)
+  const report = await finalize(rest[0], rest[1], { author: values.author, 'reviewer-model': values['reviewer-model'] })
   console.log(JSON.stringify(report, null, 2))
   process.exitCode = report.state === 'finished' ? 0 : 2
 }

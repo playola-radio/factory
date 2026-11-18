@@ -4,14 +4,14 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { abandon, repoIdFromRemote, startOrResume } from '../lib/build.ts'
+import { abandon, finish, repoIdFromRemote, startOrResume } from '../lib/build.ts'
 import type { World } from '../lib/build.ts'
 import { readDesign } from '../lib/design.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
-import { buildNextPr } from '../lib/implement.ts'
-import type { BreakFinding, ExcessFinding, Workshop } from '../lib/workshop.ts'
+import { buildDesign, buildNextPr } from '../lib/implement.ts'
+import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
-import type { FixWave, Implementation } from '../lib/store.ts'
+import type { FixWave, Implementation, ReviewWave } from '../lib/store.ts'
 
 function addDesign(repo: string, name: string, planned: boolean) {
   const dir = path.join(repo, 'designs', 'ready', name)
@@ -100,7 +100,7 @@ test('the repository is identified the same way from either kind of address', ()
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number } } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered' } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -111,6 +111,13 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const fixPrompts: string[] = []
   let audits = 0
   const opened: { branch: string; base: string; title: string; body: string }[] = []
+  // Each look at GitHub sees the next state; the last one repeats. With none given, the owner has approved.
+  const github = [...(options.github ?? [{ approved: true }])]
+  const reviewPrompts: string[] = []
+  const replies: { id: string; body: string; resolved: boolean }[] = []
+  const did = { pushed: 0, reReviews: 0, merged: 0, waits: 0 }
+  const steps: string[] = []
+  let head = 'abc'
   const workshop: Workshop = {
     prepareWorktree: () => options.worktree ?? repo,
     mergeBase: (_worktree, base) => {
@@ -137,17 +144,32 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       const ids = [...prompt.matchAll(/\*\*([BE]\d+)\*\*/g)].map((match) => match[1])
       return { summary: 'fixed', dispositions: ids.map((id) => ({ id, action: 'fixed' as const, reason: '' })), checks: [], blockers: [], ...options.fix }
     },
-    head: () => 'abc',
+    head: () => head,
     linesChanged: () => options.lines ?? { added: 5, deleted: 5 },
     commitMessages: () => options.commits ?? ['add the thing'],
     uncommittedFiles: () => options.uncommitted ?? [],
+    markDesignBuilt: () => steps.push('design marked built') === 1,
     openPullRequest: (_worktree, branch, base, title, body) => {
+      steps.push('opened')
       opened.push({ branch, base, title, body })
       return { number: 7, url: 'https://github.com/owner/app/pull/7' }
     },
+    pullRequestState: () => ({ state: 'open', head, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptileScore: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
+    answerReview: async (_worktree, prompt) => {
+      reviewPrompts.push(prompt)
+      const action = options.answerAction ?? 'fixed'
+      if (action === 'fixed') head = `fix-${reviewPrompts.length}`
+      const ids = [...prompt.matchAll(/\*\*(R\d+)\*\*/g)].map((match) => match[1])
+      return { summary: 'answered', replies: ids.map((id) => ({ id, action, reply: `reply to ${id}` })), checks: [], blockers: [], ...options.answer }
+    },
+    push: () => void (did.pushed += 1),
+    reply: (_number, item, body, resolved) => void replies.push({ id: item.id, body, resolved }),
+    requestReview: () => void (did.reReviews += 1),
+    merge: () => void (did.merged += 1),
+    wait: async () => void (did.waits += 1),
   }
   const build = () => buildNextPr(started.prs, started.claim, world, workshop)
-  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits }
+  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.prs, started.claim, world, workshop) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -156,12 +178,12 @@ test('the first PR is implemented on its own branch from the plan section', asyn
   assert.equal(report.state === 'implemented' && report.branch, 'factory/001-first/pr-1')
   assert.match(prompts[0], /PR 1, "feature: do the thing"/)
   assert.match(prompts[0], /cut from `feature\/x`/)
-  assert.deepEqual(events(), ['design claimed', 'pr started', 'pr implemented', 'gate started', 'gate clean', 'pr opened'])
+  assert.deepEqual(events(), ['design claimed', 'pr started', 'pr implemented', 'gate started', 'gate clean', 'pr opened', 'pr merged'])
 })
 
-test('once every PR is opened nothing more is run', async () => {
+test('once every PR is merged nothing more is run', async () => {
   const { build, prompts, reviews, opened } = await buildPr()
-  assert.deepEqual(await build(), { state: 'all PRs opened' })
+  assert.deepEqual(await build(), { state: 'all PRs merged' })
   assert.deepEqual([prompts.length, reviews.length, opened.length], [1, 1, 1])
 })
 
@@ -181,7 +203,7 @@ test('a PR the gate did not pass is not opened', async () => {
 test('a PR that passed the gate but was never opened is opened without being built or reviewed again', async () => {
   const { build, world, report, prompts, reviews, opened } = await buildPr()
   if (!('gate' in report)) throw new Error('not gated')
-  const { pullRequest: _, ...unopened } = report
+  const { pullRequest: _, review: __, ...unopened } = report
   world.store.savePrReport('owner/app', unopened)
   const again = await build()
   assert.equal('pullRequest' in again && again.pullRequest?.number, 7)
@@ -312,7 +334,132 @@ test('a PR implemented before the gate existed goes through the gate without bei
   const saved = world.store.prReport('owner/app', 1)!
   delete saved.gate
   delete saved.pullRequest
+  delete saved.review
   world.store.savePrReport('owner/app', saved)
   assert.equal(gateOf(await build()).state, 'clean')
   assert.equal(prompts.length, 1)
+})
+
+const reviewState = (report: Awaited<ReturnType<typeof buildNextPr>>) => ('review' in report ? report.review?.state : undefined)
+const BOT_THREAD: ReviewItem = { id: 'T1', kind: 'thread', fromOwner: false, where: 'App.swift:9', text: 'greptile-apps: this breaks a repo rule' }
+const OWNER_THREAD: ReviewItem = { id: 'T2', kind: 'thread', fromOwner: true, where: 'App.swift:3', text: 'briankeane: Why not in the other file?' }
+const OWNER_COMMENT: ReviewItem = { id: 'comment-5', kind: 'comment', fromOwner: true, text: 'Rename the button please' }
+
+test('an approved PR with passing checks is merged, and the design goes on until every PR is merged', async () => {
+  const { report, did, design } = await buildPr()
+  assert.equal(reviewState(report), 'merged')
+  assert.equal(did.merged, 1)
+  assert.deepEqual(await design(), { state: 'all PRs merged' })
+})
+
+test('a PR the owner has not approved is never merged', async () => {
+  const { report, did, events } = await buildPr({ github: [{}, {}, { state: 'closed' }] })
+  assert.equal(did.merged, 0)
+  assert.equal(did.waits, 2)
+  assert.equal(reviewState(report), 'closed')
+  assert.deepEqual(events().slice(-2), ['pr waiting on owner', 'pr closed'])
+})
+
+test('an approved PR waits for its checks before merging', async () => {
+  const { did } = await buildPr({ github: [{ approved: true, checks: 'pending' }, { approved: true }] })
+  assert.deepEqual([did.waits, did.merged], [1, 1])
+})
+
+test('an approved PR with a failing check gets the check fixed instead of being merged', async () => {
+  const { did, reviewPrompts } = await buildPr({ github: [{ approved: true, checks: 'failed', failedChecks: ['swiftlint_check'] }, { state: 'closed' }] })
+  assert.equal(did.merged, 0)
+  assert.match(reviewPrompts[0], /Checks failing on the pull request:\*\* swiftlint_check/)
+})
+
+test("a bot's finding is fixed, pushed, answered in its thread, resolved, and reviewed again when the score was low", async () => {
+  const { report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptileScore: 0 }, { approved: true }] })
+  assert.match(reviewPrompts[0], /\*\*R1\*\* \[bot\] `App.swift:9`\n  > greptile-apps: this breaks a repo rule/)
+  assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
+  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, waits: 0 })
+  assert.equal(reviewState(report), 'merged')
+})
+
+test('no second review is asked for when the score was four or more', async () => {
+  const { did } = await buildPr({ github: [{ items: [BOT_THREAD], greptileScore: 4 }, { approved: true }] })
+  assert.deepEqual([did.pushed, did.reReviews], [1, 0])
+})
+
+test("the owner's question is answered in the thread with no push, and the thread is left for the owner", async () => {
+  const { did, replies } = await buildPr({ github: [{ items: [OWNER_THREAD], greptileScore: 0 }, { state: 'closed' }], answerAction: 'answered' })
+  assert.deepEqual(replies, [{ id: 'T2', body: 'reply to R1', resolved: false }])
+  assert.deepEqual([did.pushed, did.reReviews], [0, 0])
+})
+
+test("a thread the owner opened is never resolved, even when the change was made", async () => {
+  const { replies } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { state: 'closed' }] })
+  assert.equal(replies[0].resolved, false)
+})
+
+test("the owner's comment on the PR is answered once", async () => {
+  const { replies, reviewPrompts } = await buildPr({ github: [{ items: [OWNER_COMMENT] }, { items: [OWNER_COMMENT] }, { state: 'closed' }] })
+  assert.equal(reviewPrompts.length, 1)
+  assert.equal(replies.length, 1)
+})
+
+test('after three rounds bots are no longer answered, but the owner still is', async () => {
+  const bots = { items: [BOT_THREAD] }
+  const { reviewPrompts } = await buildPr({ github: [bots, bots, bots, bots, { items: [BOT_THREAD, OWNER_THREAD] }, { state: 'closed' }] })
+  assert.equal(reviewPrompts.length, 4)
+  assert.doesNotMatch(reviewPrompts[3], /greptile-apps/)
+  assert.match(reviewPrompts[3], /\[owner\]/)
+})
+
+test('a review fix that leaves a check failing is not pushed or posted, and the next build tries again', async () => {
+  const { report, did, replies, events, build, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD] }], answer: { checks: [{ command: 'make lint', passed: false }] } })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.deepEqual('review' in report && report.review?.problems, ['Check failed: make lint'])
+  assert.deepEqual([did.pushed, replies.length], [0, 0])
+  assert.equal(events().at(-1), 'pr needs attention')
+  await build()
+  assert.equal(reviewPrompts.length, 2)
+})
+
+test('a PR that was closed without merging stops the design', async () => {
+  const { build, design } = await buildPr({ github: [{ state: 'closed' }] })
+  assert.equal((await build()).state, 'stopped')
+  assert.equal((await design()).state, 'stopped')
+})
+
+test("an approval merges straight away, and the owner's open question is still answered", async () => {
+  const { did, replies, reviewPrompts } = await buildPr({ github: [{ approved: true, items: [OWNER_THREAD, BOT_THREAD] }], answerAction: 'answered' })
+  assert.equal(did.merged, 1)
+  assert.match(reviewPrompts[0], /already been merged/)
+  assert.doesNotMatch(reviewPrompts[0], /greptile-apps/)
+  assert.deepEqual(replies, [{ id: 'T2', body: 'reply to R1', resolved: false }])
+})
+
+test('a base branch that moved on without conflicts is merged in and pushed with no agent', async () => {
+  const { did, merges, reviewPrompts } = await buildPr({ github: [{ conflicts: true }, { approved: true }] })
+  assert.deepEqual([merges.length, did.pushed, reviewPrompts.length, did.merged], [1, 1, 0, 1])
+})
+
+test('conflicts with the base branch are resolved by the implementer and pushed, and an approval never merges over them', async () => {
+  const { did, reviewPrompts } = await buildPr({ github: [{ conflicts: true, approved: true }, { approved: true }], merge: 'conflicts' })
+  assert.match(reviewPrompts[0], /`feature\/x` was merged into this branch and left conflicts/)
+  assert.deepEqual([did.pushed, did.merged], [1, 1])
+})
+
+test("the design's last PR moves the design to done before it is opened", async () => {
+  const { steps } = await buildPr()
+  assert.deepEqual(steps.slice(0, 2), ['design marked built', 'opened'])
+})
+
+test('a design is still found once it has been moved to done', async () => {
+  const { repo } = setup([['001-first', true]])
+  fs.mkdirSync(path.join(repo, 'designs', 'done'))
+  fs.renameSync(path.join(repo, 'designs', 'ready', '001-first'), path.join(repo, 'designs', 'done', '001-first'))
+  assert.equal(readDesign(repo, '001').dir, path.join('designs', 'done', '001-first'))
+})
+
+test('finishing a design frees the repo and forgets its PRs, so the next design starts clean', async () => {
+  const { world, events } = await buildPr()
+  finish(world)
+  assert.equal(world.store.claimFor('owner/app'), null)
+  assert.equal(world.store.prReport('owner/app', 1), null)
+  assert.equal(events().at(-1), 'design finished')
 })

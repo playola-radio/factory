@@ -17,12 +17,16 @@ export interface FactoryEvent {
   type:
     | 'design claimed'
     | 'design abandoned'
+    | 'design finished'
     | 'pr started'
     | 'pr implemented'
     | 'pr needs attention'
     | 'gate started'
     | `gate ${GateReport['state']}`
     | 'pr opened'
+    | 'review round'
+    | 'pr waiting on owner'
+    | `pr ${NonNullable<ReviewReport['state']>}`
 }
 
 export interface Implementation {
@@ -70,6 +74,21 @@ export interface PullRequest {
   url: string
 }
 
+export interface ReviewWave {
+  summary: string
+  replies: { id: string; action: 'fixed' | 'declined' | 'answered'; reply: string }[]
+  checks: Check[]
+  blockers: string[]
+}
+
+// `answered` holds the owner's top-level comments already replied to; threads show that on GitHub themselves.
+export interface ReviewReport {
+  state?: 'merged' | 'closed' | 'fix failed'
+  rounds: (ReviewWave & { head: string })[]
+  answered: string[]
+  problems: string[]
+}
+
 export interface PrReport {
   state: 'implemented' | 'needs attention'
   number: number
@@ -81,6 +100,7 @@ export interface PrReport {
   implementation: Implementation
   gate?: GateReport
   pullRequest?: PullRequest
+  review?: ReviewReport
 }
 
 // The only place that knows where factory state lives, so it can move off this disk later.

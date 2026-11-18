@@ -54,6 +54,13 @@ export function abandon(world: World): { state: 'abandoned'; design: string } | 
   return { state: 'abandoned', design: claim.design }
 }
 
+export function finish(world: World): void {
+  const claim = world.store.claimFor(world.repoId)
+  if (!claim) return
+  world.store.release(world.repoId)
+  world.store.record({ at: world.now(), repo: claim.repo, design: claim.design, type: 'design finished' })
+}
+
 const git = (repo: string, ...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()
 
 export function repoIdFromRemote(url: string): string {
