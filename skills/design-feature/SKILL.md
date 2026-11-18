@@ -1,110 +1,144 @@
 ---
 name: design-feature
-description: Use when starting a new feature or changing an existing one, BEFORE any implementation code — drives scope agreement, visual design in pen.dev, data-layer contracts, adversarial review, and produces a design/features/{slug}/ folder (spec, implementation plan, exports) shipped as its own PR. Works for Claude and Codex (both have the pencil MCP), from the playola monorepo or playola-radio-ios.
+description: Use when starting a new feature or changing an existing one, BEFORE any implementation code, and when a design folder needs its implementation plan — "design X", "let's design it first", "start a design PR", "plan design 001", "finish the design". Produces one numbered folder in designs/ready/ (screens, contract, model changes, implementation plan) shipped as one design PR, which is the only thing the factory will build from.
 ---
 
 # Design Feature
 
-Design-only replacement for the old `build-feature`. The output is a `design/features/{slug}/` folder containing everything a FRESH session needs to implement the feature: an approved spec, an implementation plan, and visual exports. No application code is written here — implementation happens later via `superpowers:executing-plans` (single PR) or `orchestrate-feature` (multi-PR / multi-repo).
+One conversation with the owner that ends in one folder the factory can build without asking anything:
 
-Run this skill from the repo the feature is FOR (the playola monorepo, or playola-radio-ios for iOS features). **The data-layer phases are never skipped, whatever the surface:** every feature's models and endpoints are designed against the playola backend, because thinking through how the feature sits with — and limits, and is limited by — the existing data models is what makes the plan genuinely useful. For iOS features the backend lives in a different repo; the phases below say how to reach it.
+```text
+designs/ready/<NNN>-<kebab-name>/
+  Design.md               always
+  screenshots/            always; <screen>--<state>.png
+  ApiContract.md          only if the design calls any endpoint
+  ModelChanges.md         only if a stored model changes
+  ImplementationPlan.md   written here with the owner, then finished by `factory finalize`
+```
 
-## Phase 0 — Prerequisites
+No application code is written here. The folder is the truth: every decision made in chat is written into it before moving on.
 
-**a. Primary branch.** Detect it — never assume: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`, falling back to `git symbolic-ref refs/remotes/origin/HEAD`. (Both Playola repos use `develop`; in the monorepo, merging `main` deploys prod.)
+`factory status <repo>` names anything wrong with a folder's shape or plan; run it whenever unsure. If `factory` is not on the PATH, use `node ~/playola/playola-skills/factory/bin/factory.ts`.
 
-**b. Fresh base.** `git fetch origin`, then require BOTH:
-- Working tree clean.
-- Current branch is the primary branch itself or freshly cut from up-to-date primary: `git merge-base HEAD origin/<primary>` equals `git rev-parse origin/<primary>`.
+If the folder already exists and only lacks a finished plan, go to step 8.
 
-If behind: stop and tell the user. Never auto-reset, auto-merge, or switch branches. If on the primary branch itself, create a feature branch (`<author>/design-<slug>`) before writing any files — artifacts land via PR, never direct pushes to primary.
+## 1. Set up
 
-**c. Backend repo.** If the current repo is not the playola monorepo, locate the local checkout that holds the server (the sibling `../playola`, i.e. `/Users/brian/playola/playola`); ask the user if it isn't there. Record its path and its current `develop` SHA — the data-layer phases read models and endpoints from it, and proposed backend changes are changes to THAT repo.
+- **Base branch:** the one the owner names (a feature branch such as `feature/recorded-shows`), else the repo default from `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`. Never `main` in a repo whose default is `develop`.
+- **Fresh base:** `git fetch`, tree clean, and the branch is the base or freshly cut from it. If not, stop and say so; never reset, merge or switch on your own. Work on `<author>/design-<name>`.
+- **Backend:** models and endpoints live in the playola monorepo. From another repo, read them at `/Users/brian/playola/playola` and record its `develop` SHA in `Design.md`.
+- **Canvas:** the repo's `design/*.pen`, read and changed only through the pencil MCP, never with file tools. `get_app_state` failing means Pen.app is not running: ask the owner to open it. Never skip the screens silently.
 
-**d. Pencil capability.** Call the pencil MCP `get_app_state`. Both Claude and Codex have this MCP configured; it works from any workspace (Conductor included) as long as the Pen.app desktop app is running. If it fails: tell the user to launch Pen.app and retry. Only if pencil is genuinely unavailable, continue with the non-visual phases and record a "Visual phases pending — needs a pencil-capable session" blocker in the spec; never silently skip visuals.
+## 2. Scope one slice
 
-Record the inspected commit SHA (`git rev-parse HEAD`) — it goes in the spec.
+Push back until you agree what is built and what is not. Then cut it: one design is one thin path a user can complete end to end (create → act → see the result), not a layer. The first slice is this design; each later slice is its own numbered folder later. `<NNN>` is the next free number across `designs/ready/` and `designs/done/`; numbers are the build order.
 
-## Phase 1 — Scope
+Record in `Design.md`: who uses it, the intent in two sentences, what is out of scope, and for every list the realistic upper size (hundreds of rows, not three).
 
-Ask what the user wants to build; they describe it in general terms. Push back, question assumptions, and propose alternatives until you agree on what is being built and — equally important — what is NOT. (Claude: invoke `superpowers:brainstorming` for this conversation. Codex: emulate it — one question at a time, explore alternatives before settling.)
+## 3. Read what exists
 
-On agreement: pick a short human-readable `{slug}` and create `design/features/{slug}/spec.md` with: Scope, Non-goals, Open questions, Base commit SHA(s) (this repo, and the backend repo if different), Target surface(s) (`website` / `client` / `ios` / backend-only). This file is the durable record — every later phase appends to it, and every chat approval is logged into it (what was approved + which revision it covers). Chat history alone is NOT the record.
+Only what this slice touches: `docs/context/` feature docs, the backend's `MODEL.md` and `ENDPOINTS.md` files, the current screens on the canvas, and the code those screens run on. If the slice replaces a working screen, read that screen's page, model, service, route and tests first, so proven behaviour is kept on purpose.
 
-## Phase 2 — Existing state
+## 4. Screens, one at a time
 
-Survey only what this feature touches:
-- **Designs:** existing screens/components in the current repo's `design/*.pen` (screenshot relevant frames with `TakeScreenshot`).
-- **Models:** `server/src/db/models/*/MODEL.md` in the backend repo for related tables.
-- **Endpoints:** the backend repo's `.claude/API_ENDPOINTS.md` → `api/[module]/ENDPOINTS.md` for related routes.
+Ask how many layout directions to explore (3–4 for something substantial, 1–2 for something small). Then draw one screen, wait for the owner's explicit approval, and only then draw the next. New frames go in a labelled zone on the canvas, following `design/DESIGN_STATUS.md` where the repo has one; reuse existing components.
 
-Append an "Existing contracts" section to spec.md: compact model field tables, endpoint req/res bodies, screenshots of current screens (write images to `design/features/{slug}/exports/existing/`). Relevant items only — exhaustive dumps become stale doc debt.
+Every screen is drawn or described in each state it can be reached in: **a brand-new unsaved item**, loading, empty, error, and locked or forbidden. Lists are drawn at their real size, with the search or scrolling that implies. Copy is functional (no greetings or encouragement), and primary actions outrank secondary ones visually.
 
-## Phase 3 — Visual design
+## 5. Contract and models
 
-Visuals come first; the data layer follows and visuals get revised afterward if the data review forces it.
+- **`ApiContract.md`:** every endpoint the design calls, including unchanged ones and the ones existing code already makes on the same path (creating the item, loading it). Each has its method and path, which repo owns it, `unchanged` / `changed` / `new`, and real request and response JSON copied from the backend's docs. Client-side model changes go here too.
+- **`ModelChanges.md`:** every stored field added, changed or removed, with type, nullability, where its value comes from, and the migration or backfill it implies. Default to no new field: anything derivable from existing data is not stored. List the fields you considered and left out, with why.
+- Backend conventions: REST resources, `PUT` never `PATCH`, one source of truth for anything that can change.
 
-**a. Canvas file.** Use the canonical file for the target surface, in the repo whose UI is being designed: `design/website.pen` / `design/client.pen` in the monorepo, the existing `design/playola-ios.pen` in playola-radio-ios. Create it if missing. One shared file per surface so components accumulate into a design system — not one file per feature. Ask the user to open it in Pen.app to watch and edit live (it's multiplayer; re-read nodes rather than assuming your state is current). New feature frames go in a labeled zone; reuse existing components where they fit.
+## 6. Audit before planning
 
-**b. Layout exploration.** Ask how many layout directions to explore before starting: suggest 3–4 for a substantial feature, 1–2 for a small one. Build them side by side; the user picks one or blends.
+Check every screen against the code, and write down what you checked:
 
-**c. Finalize ONE screen at a time.** Never batch approvals. For each screen: iterate until the user explicitly approves it, then log the approved frame's node id + name in spec.md and move to the next. Cover the states that apply (loading, empty, error, forbidden) — as annotations or dedicated frames, agreed with the user.
+1. **Consistency** with existing navigation, naming, components and endpoint shapes.
+2. **Completeness:** whatever can be created can be edited and removed; no dead ends; every state in step 4 is covered.
+3. **Fewer screens and inputs:** anything the system already knows is prefilled, never asked.
+4. **One source of truth** for every changeable value; nothing copied.
+5. **Fewest fields**, and what will hurt when the model is extended.
+6. **Copy and density** at the sizes from step 2.
 
-## Phase 4 — Data layer
+Fix what the code or the conventions already answer. Everything else is the owner's: ask one at a time with option A, option B, your recommendation and the cost of being wrong — never "what do you think?". A choice is the owner's whenever it changes what a user can see, delete, recover or publish, implies a migration, or changes which repos are involved.
 
-Mandatory for every feature, including iOS-only UI: this is where the feature gets forced through the existing schema and its neighbors. Append to spec.md, each subsection presented for explicit chat approval:
+Write each answer into `Design.md` under `## Decisions`, and correct the screens and contract to match.
 
-- **a. Changes to existing models** — field tables, migration implications.
-- **b. Changes to existing endpoints** — request/response deltas, compatibility notes.
-- **c. New models** — table name, columns + types, indexes, associations, one-paragraph MODEL.md sketch.
-- **d. New endpoints** — table: `| Method | Path | Auth | Inputs | Outputs |`.
+## 7. Write `Design.md` and export
 
-All of this targets the playola backend regardless of where the skill runs. Follow its conventions: REST resources (no aggregation endpoints), `PUT` never `PATCH`, model-enum pattern, user-station authorization levels.
+`Design.md` holds, in order: title `# <NNN> — <Name>`, the step 2 record, `## Screens` (one `###` per screen and state, with its image link `![…](screenshots/<screen>--<state>.png)`, its address, and how it is reached and left), `## Decisions`, and `## Done when`: a `- [ ]` checklist where each line is one outcome a user could check on a device.
 
-## Phase 5 — Adversarial review (opposite provider)
+Export every approved frame as PNG into `screenshots/` (pencil `Export`, absolute path, then rename each file to `<screen>--<state>.png`). Every file there must be linked from `Design.md`.
 
-Claude runs `/codex` consult; Codex runs `claude -p "<prompt>"`. Embed the full spec.md content in the prompt (don't make the reviewer hunt for files) and ask:
+## 8. Implementation plan
 
-1. Duplicated model data — is every datum's single source of truth clear? Any duplication (snapshot, cache, denormalization) must be deliberate, with its authority and consistency story stated.
-2. Derive vs store — for each derived-on-the-fly property, what is the query cost (N+1, indexes) and does history need it stored?
-3. Must-design-now vs deferrable — what other screens/models MUST be settled now to avoid painting us into a corner? Everything deferrable stays deferred.
-4. Fit — does the design fit the existing schema, REST conventions, and authorization model?
-5. Extraneous properties — what can be dropped?
-6. Integrity — constraints, uniqueness, nullability, deletion behavior, ownership.
-7. Migration/backfill feasibility on the live schema.
-8. Contract completeness — validation, error shapes, pagination.
-9. UI completeness — loading/empty/error/forbidden states covered for each approved screen?
-10. Acceptance criteria — concrete and testable?
+Read the code the design builds on, then write `ImplementationPlan.md` with the owner. Anything the design does not settle is a question for the owner (option A, option B, recommendation), and the answer goes into the design files, not only the plan.
 
-Every finding gets one of three dispositions, recorded in spec.md: **resolved** (spec updated), **accepted with rationale**, or **blocking**. Merely having asked is worth nothing. If a finding changes the data design in a way that invalidates approved visuals, loop back to Phase 3 for the affected screens. If the opposite provider is unreachable, record "adversarial review NOT run" as a blocker — never claim a review that didn't happen.
+Cut the work into PRs built in order. Each leaves the app building with tests passing and can be reviewed on its own. Avoid tiny PRs: every PR costs a paid review, and one PR for a small design is fine. The plan adds nothing the design does not ask for. It names the base branch and any repo bookkeeping the PR must do.
 
-## Phase 6 — Implementation plan
+The factory reads the PRs back out of this file, so keep the layout exactly:
 
-Claude: invoke `superpowers:writing-plans`; Codex: produce the same shape. Write to `design/features/{slug}/implementation-plan.md` — override the superpowers default output path; nothing goes to `docs/superpowers/` for this workflow.
+```markdown
+# <NNN>-<name> — Implementation plan
 
-The plan must let a fresh session implement without this session's context: scope + acceptance criteria; base commit SHA(s); target repo(s), surface(s), and code paths; ordered tasks with per-task verification; migration/auth requirements; pointers to the approved screen frames and exports; unresolved questions. Task references per repo:
+The design files beside this plan are the truth; this plan only says how to build them.
 
-- **Backend (playola):** the step-skills `create-model`, `create-lib`, `create-endpoint`.
-- **Web frontend (playola):** the `build-frontend` skill.
-- **iOS (playola-radio-ios):** the repo's `.claude/` guides (`PAGE_CREATION.md`, `VIEWS.md`, `API_CLIENT.md`, `TESTING.md`) and its branch/tracker rules (`LONG_RUNNING.md` for multi-PR efforts).
+<the approach in a short paragraph, and the decisions made while planning>
 
-State the consumer explicitly at the top: `superpowers:executing-plans` for a single PR, or `orchestrate-feature` when it spans multiple PRs. When the feature spans BOTH repos, group tasks by repo, order backend contracts before the clients that consume them, and note that each repo gets its own implementation session and PR — include the design folder's location so the other repo's session can find the spec.
+| PR | Title | Depends on | Hard |
+|---|---|---|---|
+| 1 | feature: <plain English> | — | no |
+| 2 | feature: <plain English> | 1 | yes |
 
-## Phase 7 — Export & ship
+## PR 1 — feature: <plain English>
 
-**a. Exports** into `design/features/{slug}/exports/` (one `execute` call can do all of it):
-- PNG of every approved screen frame (`Export(ids, "png", dir)`).
-- Both HTML flavors: `Export(ids, "html-tailwind", …)` AND `Export(ids, "html-css", …)` — cheap to produce; Tailwind maps directly to `website/`, plain CSS to the MUI `client/`, and both remain useful reference even for iOS.
-- `design-tokens.json` (`GetVariables()` dump) and per-screen JSON (`Get(frame, {resolveVariables: true})`) for fonts and measurements — the primary machine-readable source for SwiftUI.
+<two or three sentences: what a user can do once this is merged>
 
-**b. Verify artifacts** (no app-code lint/test — nothing but design files changed): every approved screen has its approval logged in spec.md; the plan is consistent with the spec; exports correspond to the approved frames; JSON is valid; zero blocking findings. Any failure: stop and fix or surface it.
+**Changes**
 
-**c. Ship:** commit `design/features/{slug}/` + `design/{surface}.pen` in the repo the skill ran from, push, PR to `<primary>` (never `main` unless main IS the primary). Claude: run `/fix-review` — bot review of the committed spec is a free extra design review. Codex: report the PR URL and ask the user to run `/fix-review` in Claude.
+- <one step per line, naming the real files and types, so the implementer makes no design decisions>
+
+**Tests**
+
+- <one specific test case per line>
+
+**Screenshots it must match**
+
+- `screenshots/<screen>--<state>.png`
+
+**"Done when" items it delivers**
+
+- 3. <the checklist line; the number is its position in `## Done when`>
+```
+
+Titles start with `feature:`, `bugfix:` or `chore:` and use no code names. Every screenshot and every "Done when" item belongs to exactly one PR; an empty list is `- none`. `Hard` is `yes` only for a subtle correctness or concurrency problem.
+
+## 9. Finalize
+
+When the owner is happy with the plan, run this and wait for it; the review takes several minutes:
+
+```bash
+factory finalize "$(git rev-parse --show-toplevel)" <NNN> --author <claude|codex, whichever you are>
+```
+
+It checks the file's shape for free, has the other vendor review the plan against the design and the code, and marks the plan finished.
+
+- **Exit 0, `finished`:** done. Confirm `factory status` shows `"buildable": true`.
+- **Exit 2, `plan needs fixing`:** a shape problem; fix the file and run it again.
+- **Exit 2, `review found problems`:** show the owner every finding with your view of whether it is right. Fix the plan, or the design when the gap is there, then run it again. A finding you believe is wrong is the owner's call, not yours.
+- **Exit 1:** it broke; show the owner the error.
+
+Any later edit to the design or the plan undoes the finish; run finalize again. Never write the `<!-- factory: … -->` line yourself.
+
+## 10. Ship
+
+When the owner approves the folder: commit it with the canvas file and open one PR to the base branch, titled `design: <plain English>`, through the normal PR flow. The factory builds from the folder once that PR is merged.
 
 ## Rules
 
-- Approval happens in chat but is persisted in spec.md with the revision it covers — an unlogged approval doesn't exist.
-- One feature per branch and per folder.
-- Bounded retries for transient tool failures; missing capabilities and unresolved product decisions escalate to the user immediately — don't grind.
-- If the user asks to skip a phase (visuals, adversarial review): push back once with the tradeoff and offer a lighter version instead (one layout direction, terser spec, single combined review pass). If they still want it skipped, comply — the user outranks this skill — but record the waiver in spec.md (what was skipped, at whose direction) so the implementation session inherits the risk knowingly. Never skip silently, and never refuse outright.
-- An unreviewed or blocked design must never be handed off as implementation-ready.
+- One slice, one folder, one branch, one PR.
+- A decision that is only in chat does not exist.
+- If the owner asks to skip the screens or the audit, say once what that risks, then comply and record the skip in `Design.md`.
+- A folder that `factory status` calls not buildable is never handed off as ready.
