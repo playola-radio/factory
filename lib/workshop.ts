@@ -2,16 +2,73 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { runAgent } from './agents.ts'
-import type { Workshop } from './implement.ts'
-import type { Implementation } from './store.ts'
+import { DEFAULT_MODEL, runAgent } from './agents.ts'
+import { designStatuses } from './readiness.ts'
+import type { FixWave, Implementation, PullRequest } from './store.ts'
+
+export interface BreakFinding {
+  severity: 'P0' | 'P1' | 'P2' | 'P3'
+  where: string
+  problem: string
+}
+
+export interface ExcessFinding {
+  where: string
+  delete: string
+  breaks: string
+}
+
+export interface Workshop {
+  prepareWorktree(base: string, branch: string): string
+  mergeBase(worktree: string, base: string): 'merged' | 'conflicts'
+  implement(worktree: string, prompt: string, step: string): Promise<Implementation>
+  breakIt(worktree: string, prompt: string, step: string): Promise<{ findings: BreakFinding[] }>
+  auditExcess(worktree: string, prompt: string, step: string): Promise<{ findings: ExcessFinding[] }>
+  fix(worktree: string, prompt: string, step: string): Promise<FixWave>
+  head(worktree: string): string
+  linesChanged(worktree: string, since: string): { added: number; deleted: number }
+  commitMessages(worktree: string, base: string): string[]
+  uncommittedFiles(worktree: string): string[]
+  openPullRequest(worktree: string, branch: string, base: string, title: string, body: string): PullRequest
+}
+
+export const planIsIntact = (worktree: string, design: string) =>
+  designStatuses(worktree).some((status) => status.design === design && status.buildable)
+
+export function branchProblems(workshop: Workshop, worktree: string, base: string, design: string): string[] {
+  const commits = workshop.commitMessages(worktree, base)
+  const uncommitted = workshop.uncommittedFiles(worktree)
+  return [
+    ...(commits.length === 0 ? ['No commits were made.'] : []),
+    ...(commits.some((message) => /co-authored-by/i.test(message)) ? ['A commit message has a Co-Authored-By line.'] : []),
+    ...(uncommitted.length > 0 ? [`Uncommitted changes: ${uncommitted.join(', ')}`] : []),
+    ...(planIsIntact(worktree, design) ? [] : ['The design folder or its plan was changed.']),
+  ]
+}
 
 const IMPLEMENT_TIMEOUT_MS = 4 * 60 * 60 * 1000
-const SCHEMA = path.join(import.meta.dirname, '..', 'schemas', 'implementation.json')
+const REVIEW_TIMEOUT_MS = 20 * 60 * 1000
+const schema = (name: string) => path.join(import.meta.dirname, '..', 'schemas', `${name}.json`)
+
+// The account that authors the factory's commits and opens its PRs, so the owner can review and approve them.
+const AUTHOR = { login: 'marge-watson', name: 'Marge', email: '263082108+marge-watson@users.noreply.github.com' }
+const AUTHOR_ENV = { GIT_AUTHOR_NAME: AUTHOR.name, GIT_AUTHOR_EMAIL: AUTHOR.email, GIT_COMMITTER_NAME: AUTHOR.name, GIT_COMMITTER_EMAIL: AUTHOR.email }
+
+function authorToken(): string {
+  try {
+    return execFileSync('gh', ['auth', 'token', '--user', AUTHOR.login], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    throw new Error(`gh is not signed in as ${AUTHOR.login}. Run: gh auth login, sign in as ${AUTHOR.login}, then gh auth switch to go back to your own account.`)
+  }
+}
 
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' }).trim()
 
-export function realWorkshop(repo: string, worktreesDir: string, runDir: string, model: string): Workshop {
+export function realWorkshop(repo: string, repoId: string, worktreesDir: string, runDir: string, model: string): Workshop {
+  const writer = (schemaName: string, cwd: string, prompt: string, step: string) =>
+    runAgent({ vendor: 'claude', model, prompt, schemaFile: schema(schemaName), cwd, runDir, step, canWrite: true, timeoutMs: IMPLEMENT_TIMEOUT_MS, env: AUTHOR_ENV })
+  const reviewer = (schemaName: string, cwd: string, prompt: string, step: string) =>
+    runAgent({ vendor: 'codex', model: DEFAULT_MODEL.codex, prompt, schemaFile: schema(schemaName), cwd, runDir, step, timeoutMs: REVIEW_TIMEOUT_MS })
   return {
     prepareWorktree(base, branch) {
       const worktree = path.join(worktreesDir, branch.replaceAll('/', '__'))
@@ -31,9 +88,29 @@ export function realWorkshop(repo: string, worktreesDir: string, runDir: string,
         return 'conflicts'
       }
     },
-    implement: (worktree, prompt, step) =>
-      runAgent({ vendor: 'claude', model, prompt, schemaFile: SCHEMA, cwd: worktree, runDir, step, canWrite: true, timeoutMs: IMPLEMENT_TIMEOUT_MS }) as Promise<Implementation>,
+    implement: (worktree, prompt, step) => writer('implementation', worktree, prompt, step) as Promise<Implementation>,
+    breakIt: (worktree, prompt, step) => reviewer('gate-break', worktree, prompt, step) as Promise<{ findings: BreakFinding[] }>,
+    auditExcess: (worktree, prompt, step) => reviewer('gate-excess', worktree, prompt, step) as Promise<{ findings: ExcessFinding[] }>,
+    fix: (worktree, prompt, step) => writer('gate-fix', worktree, prompt, step) as Promise<FixWave>,
+    head: (worktree) => git(worktree, 'rev-parse', 'HEAD'),
+    linesChanged(worktree, since) {
+      const rows = git(worktree, 'diff', '--numstat', `${since}..HEAD`).split('\n').filter(Boolean).map((row) => row.split('\t'))
+      const sum = (column: number) => rows.reduce((total, row) => total + (Number(row[column]) || 0), 0)
+      return { added: sum(0), deleted: sum(1) }
+    },
     commitMessages: (worktree, base) => git(worktree, 'log', '--format=%B%x00', `origin/${base}..HEAD`).split('\0').map((message) => message.trim()).filter(Boolean),
     uncommittedFiles: (worktree) => git(worktree, 'status', '--porcelain').split('\n').filter(Boolean),
+    openPullRequest(worktree, branch, base, title, body) {
+      const options = { cwd: worktree, encoding: 'utf8' as const, env: { ...process.env, GH_TOKEN: authorToken() } }
+      const gh = (...args: string[]) => execFileSync('gh', args, options).trim()
+      execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], options)
+      const existing = JSON.parse(gh('pr', 'list', '-R', repoId, '--head', branch, '--state', 'open', '--json', 'number,url'))[0] as PullRequest | undefined
+      const url = existing?.url ?? gh('pr', 'create', '-R', repoId, '--head', branch, '--base', base, '--title', title, '--body', body)
+      const pullRequest = { number: Number(url.split('/').pop()), url }
+      if (/^ux-evidence-publish:/m.test(fs.readFileSync(path.join(worktree, 'Makefile'), { encoding: 'utf8', flag: 'a+' }))) {
+        execFileSync('make', ['ux-evidence-publish', `PR=${pullRequest.number}`], options)
+      }
+      return pullRequest
+    },
   }
 }

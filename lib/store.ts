@@ -14,14 +14,60 @@ export interface FactoryEvent {
   repo: string
   design: string
   pr?: number
-  type: 'design claimed' | 'design abandoned' | 'pr started' | 'pr implemented' | 'pr needs attention'
+  type:
+    | 'design claimed'
+    | 'design abandoned'
+    | 'pr started'
+    | 'pr implemented'
+    | 'pr needs attention'
+    | 'gate started'
+    | `gate ${GateReport['state']}`
+    | 'pr opened'
 }
 
 export interface Implementation {
   status: 'done' | 'blocked'
   summary: string
-  checks: { command: string; passed: boolean }[]
+  checks: Check[]
   blockers: string[]
+}
+
+export interface Check {
+  command: string
+  passed: boolean
+}
+
+export interface GateFinding {
+  id: string
+  severity: 'P0' | 'P1' | 'P2' | 'P3' | 'excess'
+  where: string
+  problem: string
+}
+
+export interface FixWave {
+  summary: string
+  dispositions: { id: string; action: 'fixed' | 'declined'; reason: string }[]
+  checks: Check[]
+  blockers: string[]
+}
+
+export interface GateRound {
+  round: number
+  verdict: 'clean' | 'not clean'
+  excessAudited: boolean
+  findings: GateFinding[]
+  fix?: FixWave & { added: number; deleted: number }
+}
+
+export interface GateReport {
+  state: 'clean' | 'stopped at round limit' | 'did not run' | 'fix failed'
+  rounds: GateRound[]
+  problems: string[]
+}
+
+export interface PullRequest {
+  number: number
+  url: string
 }
 
 export interface PrReport {
@@ -33,6 +79,8 @@ export interface PrReport {
   commits: string[]
   problems: string[]
   implementation: Implementation
+  gate?: GateReport
+  pullRequest?: PullRequest
 }
 
 // The only place that knows where factory state lives, so it can move off this disk later.

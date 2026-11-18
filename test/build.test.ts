@@ -9,9 +9,9 @@ import type { World } from '../lib/build.ts'
 import { readDesign } from '../lib/design.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildNextPr } from '../lib/implement.ts'
-import type { Workshop } from '../lib/implement.ts'
+import type { BreakFinding, ExcessFinding, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
-import type { Implementation } from '../lib/store.ts'
+import type { FixWave, Implementation } from '../lib/store.ts'
 
 function addDesign(repo: string, name: string, planned: boolean) {
   const dir = path.join(repo, 'designs', 'ready', name)
@@ -100,13 +100,17 @@ test('the repository is identified the same way from either kind of address', ()
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts' } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number } } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
   if (started.state !== 'started') throw new Error('not started')
   const prompts: string[] = []
   const merges: string[] = []
+  const reviews: string[] = []
+  const fixPrompts: string[] = []
+  let audits = 0
+  const opened: { branch: string; base: string; title: string; body: string }[] = []
   const workshop: Workshop = {
     prepareWorktree: () => options.worktree ?? repo,
     mergeBase: (_worktree, base) => {
@@ -118,11 +122,32 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       options.whileImplementing?.(worktree)
       return options.result ?? DONE
     },
+    breakIt: async (_worktree, prompt) => {
+      const round = reviews.push(prompt)
+      const findings = options.breaks?.[round - 1] ?? []
+      if (findings === 'fails') throw new Error('codex died')
+      return { findings }
+    },
+    auditExcess: async () => {
+      audits += 1
+      return { findings: options.excess?.[audits - 1] ?? [] }
+    },
+    fix: async (_worktree, prompt) => {
+      fixPrompts.push(prompt)
+      const ids = [...prompt.matchAll(/\*\*([BE]\d+)\*\*/g)].map((match) => match[1])
+      return { summary: 'fixed', dispositions: ids.map((id) => ({ id, action: 'fixed' as const, reason: '' })), checks: [], blockers: [], ...options.fix }
+    },
+    head: () => 'abc',
+    linesChanged: () => options.lines ?? { added: 5, deleted: 5 },
     commitMessages: () => options.commits ?? ['add the thing'],
     uncommittedFiles: () => options.uncommitted ?? [],
+    openPullRequest: (_worktree, branch, base, title, body) => {
+      opened.push({ branch, base, title, body })
+      return { number: 7, url: 'https://github.com/owner/app/pull/7' }
+    },
   }
   const build = () => buildNextPr(started.prs, started.claim, world, workshop)
-  return { repo, report: await build(), build, prompts, merges, events }
+  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -131,13 +156,36 @@ test('the first PR is implemented on its own branch from the plan section', asyn
   assert.equal(report.state === 'implemented' && report.branch, 'factory/001-first/pr-1')
   assert.match(prompts[0], /PR 1, "feature: do the thing"/)
   assert.match(prompts[0], /cut from `feature\/x`/)
-  assert.deepEqual(events(), ['design claimed', 'pr started', 'pr implemented'])
+  assert.deepEqual(events(), ['design claimed', 'pr started', 'pr implemented', 'gate started', 'gate clean', 'pr opened'])
 })
 
-test('once every PR is implemented nothing more is run', async () => {
-  const { build, prompts } = await buildPr()
-  assert.deepEqual(await build(), { state: 'all PRs implemented' })
-  assert.equal(prompts.length, 1)
+test('once every PR is opened nothing more is run', async () => {
+  const { build, prompts, reviews, opened } = await buildPr()
+  assert.deepEqual(await build(), { state: 'all PRs opened' })
+  assert.deepEqual([prompts.length, reviews.length, opened.length], [1, 1, 1])
+})
+
+test('a PR that comes through the gate clean is opened into the base branch under its plan title', async () => {
+  const { report, opened } = await buildPr({ breaks: [[{ severity: 'P3', where: 'App.swift:1', problem: 'rare' }]], fix: { dispositions: [{ id: 'B1', action: 'declined', reason: 'not worth the complexity' }] } })
+  assert.deepEqual('pullRequest' in report && report.pullRequest, { number: 7, url: 'https://github.com/owner/app/pull/7' })
+  assert.deepEqual([opened[0].branch, opened[0].base, opened[0].title], ['factory/001-first/pr-1', 'feature/x', 'feature: do the thing'])
+  assert.match(opened[0].body, /built[\s\S]*designs\/ready\/001-first[\s\S]*0 findings fixed, 1 declined[\s\S]*B1 declined: not worth the complexity/)
+})
+
+test('a PR the gate did not pass is not opened', async () => {
+  const p1 = [{ severity: 'P1' as const, where: 'App.swift:1', problem: 'crash' }]
+  const { opened } = await buildPr({ breaks: [p1, p1, p1] })
+  assert.deepEqual(opened, [])
+})
+
+test('a PR that passed the gate but was never opened is opened without being built or reviewed again', async () => {
+  const { build, world, report, prompts, reviews, opened } = await buildPr()
+  if (!('gate' in report)) throw new Error('not gated')
+  const { pullRequest: _, ...unopened } = report
+  world.store.savePrReport('owner/app', unopened)
+  const again = await build()
+  assert.equal('pullRequest' in again && again.pullRequest?.number, 7)
+  assert.deepEqual([prompts.length, reviews.length, opened.length], [1, 1, 2])
 })
 
 const BLOCKED: Implementation = { status: 'blocked', summary: 'built all but the recording', checks: [{ command: 'make lint', passed: false }], blockers: ['no simulator login'] }
@@ -195,4 +243,76 @@ test('a base branch that does not hold the finished plan stops before any work',
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-empty-'))
   fs.mkdirSync(path.join(empty, 'designs', 'ready'), { recursive: true })
   await assert.rejects(buildPr({ worktree: empty }), /does not hold the finished plan for 001-first/)
+})
+
+const P1: BreakFinding = { severity: 'P1', where: 'App.swift:10', problem: 'crashes on an empty list' }
+const P3: BreakFinding = { severity: 'P3', where: 'App.swift:20', problem: 'label is cut off' }
+const EXTRA: ExcessFinding = { where: 'App.swift:30', delete: 'the unused cache.', breaks: 'nothing' }
+const gateOf = (report: Awaited<ReturnType<typeof buildPr>>['report']) => {
+  if (!('gate' in report) || !report.gate) throw new Error('no gate ran')
+  return report.gate
+}
+
+test('a PR with no findings is clean after one round and no fix', async () => {
+  const { report, fixPrompts } = await buildPr()
+  assert.deepEqual([gateOf(report).state, gateOf(report).rounds.length, fixPrompts.length], ['clean', 1, 0])
+})
+
+test('minor findings get one small fix wave and no second review', async () => {
+  const { report, reviews, fixPrompts } = await buildPr({ breaks: [[P3]], excess: [[EXTRA]] })
+  assert.deepEqual([gateOf(report).state, reviews.length], ['clean', 1])
+  assert.match(fixPrompts[0], /\*\*B1\*\* \[P3\] `App.swift:20`: label is cut off/)
+  assert.match(fixPrompts[0], /\*\*E1\*\* \[excess\] `App.swift:30`: Delete: the unused cache. What breaks if deleted: nothing/)
+})
+
+test('a critical finding is fixed and the code is reviewed again', async () => {
+  const { report, reviews, audited } = await buildPr({ breaks: [[P1], []] })
+  assert.deepEqual([gateOf(report).state, gateOf(report).rounds.map((round) => round.verdict), reviews.length], ['clean', ['not clean', 'clean'], 2])
+  assert.equal(audited(), 1)
+})
+
+test('excess is audited again only when the fixes added more than they removed', async () => {
+  const { audited } = await buildPr({ breaks: [[P1], []], lines: { added: 40, deleted: 2 } })
+  assert.equal(audited(), 2)
+})
+
+test('a large fix wave is reviewed again even when nothing critical was found', async () => {
+  const { report, reviews } = await buildPr({ breaks: [[P3], []], lines: { added: 10, deleted: 90 } })
+  assert.deepEqual([gateOf(report).state, reviews.length], ['clean', 2])
+})
+
+test('a critical finding still there in the third round stops the gate for the owner', async () => {
+  const { report, build, fixPrompts, events } = await buildPr({ breaks: [[P1], [P1], [P1]] })
+  assert.deepEqual([gateOf(report).state, fixPrompts.length], ['stopped at round limit', 2])
+  assert.equal(events().at(-1), 'gate stopped at round limit')
+  const again = await build()
+  assert.match(again.state === 'stopped' ? again.reason : '', /ended "stopped at round limit": \[P1\] App.swift:10: crashes on an empty list/)
+})
+
+test('a review pass that fails twice is never reported as clean, and the next build runs the gate again', async () => {
+  const { report, build, prompts } = await buildPr({ breaks: ['fails', 'fails', []] })
+  assert.equal(gateOf(report).state, 'did not run')
+  assert.match(gateOf(report).problems[0], /break-it pass failed twice in round 1: codex died/)
+  assert.equal(gateOf(await build()).state, 'clean')
+  assert.equal(prompts.length, 1)
+})
+
+test('a review pass that fails once is tried again', async () => {
+  const { report } = await buildPr({ breaks: ['fails', []] })
+  assert.equal(gateOf(report).state, 'clean')
+})
+
+test('a fix wave that leaves a check failing or a finding unsettled fails the gate', async () => {
+  const { report } = await buildPr({ breaks: [[P1]], fix: { dispositions: [], checks: [{ command: 'make test', passed: false }] } })
+  assert.deepEqual([gateOf(report).state, gateOf(report).problems], ['fix failed', ['Check failed: make test', 'Finding B1 was neither fixed nor declined.']])
+})
+
+test('a PR implemented before the gate existed goes through the gate without being built again', async () => {
+  const { build, world, prompts } = await buildPr()
+  const saved = world.store.prReport('owner/app', 1)!
+  delete saved.gate
+  delete saved.pullRequest
+  world.store.savePrReport('owner/app', saved)
+  assert.equal(gateOf(await build()).state, 'clean')
+  assert.equal(prompts.length, 1)
 })

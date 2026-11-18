@@ -21,7 +21,9 @@ const USAGE = `Usage:
   factory status <repo-path>      list designs/ready and say which have a finished plan and can be built
   factory build <repo-path> [--base <branch>] [--model <id>]
                                   start the next design (or continue the one in progress) and implement its next PR
-                                  in a fresh worktree, or finish one that needs attention (three attempts at most); --base is the branch its PRs go into (default develop)
+                                  in a fresh worktree, or finish one that needs attention (three attempts at most), then put it
+                                  through the review gate (Codex tries to break it and audits it for excess, the implementer
+                                  fixes, three rounds at most), then push it and open its PR as marge-watson; --base is the branch its PRs go into (default develop)
   factory abandon <repo-path>     give up the design in progress so the next build can start
 
   finalize exits 0 when the plan is finished, 2 when the plan needs fixing, 1 on an error.`
@@ -85,9 +87,9 @@ async function main() {
     const buildDir = path.join(HOME, 'worktrees', world.repoId.replaceAll('/', '__'))
     const runDir = path.join(HOME, 'runs', `${path.basename(repo)}-${report.design}-build`)
     console.error(`${report.state}: ${report.design} on ${report.claim.base}. Agent traces: ${runDir}/traces`)
-    const pr = await buildNextPr(report.prs, report.claim, world, realWorkshop(repo, buildDir, runDir, values.model || DEFAULT_MODEL.claude))
+    const pr = await buildNextPr(report.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, values.model || DEFAULT_MODEL.claude))
     console.log(JSON.stringify({ design: report.design, base: report.claim.base, ...pr }, null, 2))
-    if (pr.state === 'needs attention' || pr.state === 'stopped') process.exitCode = 2
+    if (pr.state === 'needs attention' || pr.state === 'stopped' || ('gate' in pr && pr.gate?.state !== 'clean')) process.exitCode = 2
     return
   }
   if (command !== 'finalize' || rest.length < 1 || rest.length > 2) throw new Error(USAGE)
