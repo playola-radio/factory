@@ -189,7 +189,8 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       return fs.readdirSync(artifacts).sort().map((id) => path.join(artifacts, id, 'result.json')).filter((file) => fs.existsSync(file)).map((file) => fs.readFileSync(file, 'utf8')).join('\n')
     },
     publishEvidence(worktree, number) {
-      if (!/^ux-evidence-publish:/m.test(fs.readFileSync(path.join(worktree, 'Makefile'), { encoding: 'utf8', flag: 'a+' }))) return
+      const makefile = path.join(worktree, 'Makefile')
+      if (!fs.existsSync(makefile) || !/^ux-evidence-publish:/m.test(fs.readFileSync(makefile, 'utf8'))) return
       execFileSync('make', ['ux-evidence-publish', `PR=${number}`], asAuthor(worktree))
     },
     push(worktree, branch) {
