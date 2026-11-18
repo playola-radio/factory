@@ -88,7 +88,7 @@ test('abandoning frees the repo for the next build', () => {
 
 test('a second claim on the same repo is rejected', () => {
   const { world } = setup([])
-  const claim = { repo: 'owner/app', design: '001-first', base: 'develop', startedAt: 'now', startedFrom: '/x' }
+  const claim = { repo: 'owner/app', design: '001-first', base: 'develop', startedAt: 'now' }
   world.store.claim(claim)
   assert.throws(() => world.store.claim({ ...claim, design: '002-second' }), /already has a design in progress: 001-first/)
 })
@@ -410,6 +410,12 @@ test('after three rounds bots are no longer answered, but the owner still is', a
   assert.equal(reviewPrompts.length, 4)
   assert.doesNotMatch(reviewPrompts[3], /greptile-apps/)
   assert.match(reviewPrompts[3], /\[owner\]/)
+})
+
+test("answering the owner does not use up the rounds bots get", async () => {
+  const owner = { items: [OWNER_THREAD] }
+  const { reviewPrompts } = await buildPr({ github: [owner, owner, owner, { items: [BOT_THREAD] }, { state: 'closed' }], answerAction: 'answered' })
+  assert.match(reviewPrompts[3], /greptile-apps/)
 })
 
 test('a review fix that leaves a check failing is not pushed or posted, and the next build tries again', async () => {

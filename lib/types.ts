@@ -27,8 +27,7 @@ export interface Finding {
   fix: string
 }
 
-export interface ApprovedPlan {
-  designHash: string
+export interface PlanContent {
   summary: string
   prs: PlannedPr[]
 }

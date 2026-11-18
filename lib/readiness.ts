@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { readDesign } from './design.ts'
 import { checkPlan, parsePlan, renderPlan, tidyPlan } from './plan.ts'
 import type { PlanContent } from './plan.ts'
-import type { ApprovedPlan, Design } from './types.ts'
+import type { Design } from './types.ts'
 
 export const PLAN_FILE = 'ImplementationPlan.md'
 const SEAL = /\n<!-- factory: finished plan for design ([0-9a-f]{64}), plan ([0-9a-f]{64})\. [^\n]*-->\n/
@@ -44,10 +44,10 @@ export function readPlanBody(repo: string, design: Design): string | null {
   return fs.readFileSync(planFile(repo, design), 'utf8').replace(SEAL, '')
 }
 
-export function readApprovedPlan(repo: string, design: Design): ApprovedPlan {
+export function readApprovedPlan(repo: string, design: Design): PlanContent {
   const sealed = readSealedPlan(repo, design)
   if (!sealed) throw new Error(`${design.name} has no finished implementation plan.`)
-  return { designHash: sealed.designHash, ...parsePlan(sealed.body) }
+  return parsePlan(sealed.body)
 }
 
 export function reasonsNotBuildable(repo: string, design: Design): string[] {

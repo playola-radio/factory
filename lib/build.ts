@@ -40,7 +40,7 @@ export function startOrResume(repo: string, world: World, base: string): BuildRe
     }
   }
 
-  const claim: Claim = { repo: world.repoId, design: next.design, base, startedAt: world.now(), startedFrom: repo }
+  const claim: Claim = { repo: world.repoId, design: next.design, base, startedAt: world.now() }
   world.store.claim(claim)
   world.store.record({ at: claim.startedAt, repo: claim.repo, design: claim.design, type: 'design claimed' })
   return { state: 'started', design: next.design, claim, prs: prsOf(next.design) }

@@ -213,7 +213,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
           id: thread.id,
           kind: 'thread',
           latest: thread.comments.nodes.at(-1).id,
-          fromOwner: login(thread.comments.nodes[0]) === OWNER,
+          fromOwner: thread.comments.nodes.some((comment: any) => login(comment) === OWNER),
           where: `${thread.path}${thread.line ? `:${thread.line}` : ''}`,
           text: thread.comments.nodes.map((comment: any) => `${login(comment)}: ${comment.body}`).join('\n\n'),
         }))

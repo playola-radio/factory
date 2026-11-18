@@ -6,7 +6,6 @@ export interface Claim {
   design: string
   base: string
   startedAt: string
-  startedFrom: string
 }
 
 export interface FactoryEvent {
@@ -84,7 +83,7 @@ export interface ReviewWave {
 // `answered` holds the owner's top-level comments already replied to; threads show that on GitHub themselves.
 export interface ReviewReport {
   state?: 'merged' | 'closed' | 'fix failed'
-  rounds: (ReviewWave & { head: string })[]
+  rounds: (ReviewWave & { head: string; forBots: boolean })[]
   answered: string[]
   problems: string[]
 }

@@ -51,7 +51,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       }),
       `review-pr-${pr.number}-round-${review.rounds.length + 1}`,
     )
-    review = { ...review, rounds: [...review.rounds, { ...wave, head }] }
+    review = { ...review, rounds: [...review.rounds, { ...wave, head, forBots: failedChecks.length > 0 || items.some((item) => !item.fromOwner) }] }
     return labelled.map(({ label, item }) => ({ label, item, reply: wave.replies.find((candidate) => candidate.id === label) }))
   }
   let toldOwner = false
@@ -78,7 +78,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       await workshop.wait()
       continue
     }
-    const botsToo = review.rounds.length < MAX_BOT_ROUNDS
+    const botsToo = review.rounds.filter((round) => round.forBots).length < MAX_BOT_ROUNDS
     const items = unanswered.filter((item) => item.fromOwner || botsToo)
     const failedChecks = botsToo && !review.rounds.some((round) => round.head === github.head) ? github.failedChecks : []
     if (items.length === 0 && failedChecks.length === 0 && !conflicts) {

@@ -50,7 +50,7 @@ test('editing a finished plan makes it not buildable', () => {
 test('the recorded plan reads back as the plan that was approved', () => {
   const { repo, plan, record } = plannedRepo()
   record()
-  const { designHash, ...content } = readApprovedPlan(repo, readDesign(repo, '001'))
+  const content = readApprovedPlan(repo, readDesign(repo, '001'))
   const expected = { summary: plan.summary, prs: [{ ...plan.prs[0], changes: ['first step | `a`', '**Tests** of x'] }] }
   assert.deepEqual(content, expected)
 })

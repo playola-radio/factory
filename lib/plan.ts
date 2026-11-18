@@ -1,8 +1,8 @@
-import type { ApprovedPlan, Design } from './types.ts'
+import type { Design, PlanContent } from './types.ts'
 
 const TITLE_PREFIX = /^(feature|bugfix|chore): \S/
 
-export type PlanContent = Omit<ApprovedPlan, 'designHash'>
+export type { PlanContent }
 
 function assignedExactlyOnce<T>(what: string, expected: T[], assigned: T[]): string[] {
   const problems: string[] = []
