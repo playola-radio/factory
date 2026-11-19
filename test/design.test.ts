@@ -8,7 +8,7 @@ import { readDesign } from '../lib/design.ts'
 
 function repoWith(designText: string, screenshots = ['a--default.png']): string {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-design-'))
-  const dir = path.join(repo, 'factory', 'ready', '001-example')
+  const dir = path.join(repo, 'designs', 'ready', '001-example')
   fs.mkdirSync(path.join(dir, 'screenshots'), { recursive: true })
   for (const name of screenshots) fs.writeFileSync(path.join(dir, 'screenshots', name), '')
   fs.writeFileSync(path.join(dir, 'Design.md'), designText)
@@ -20,7 +20,7 @@ const GOOD = '# 001\n\n![a](screenshots/a--default.png)\n\n## Done when\n\n- [ ]
 test('reads the checklist, screenshots and optional files of a design', () => {
   assert.deepEqual(readDesign(repoWith(GOOD), '1'), {
     name: '001-example',
-    dir: 'factory/ready/001-example',
+    dir: 'designs/ready/001-example',
     files: ['Design.md', 'ApiContract.md'],
     screenshots: ['a--default.png'],
     doneWhen: ['first outcome', 'second outcome'],

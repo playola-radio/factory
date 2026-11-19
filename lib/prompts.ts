@@ -12,11 +12,6 @@ export function renderPrompt(name: string, values: Record<string, string>): stri
   })
 }
 
-// The repo's own QA rules, read from the base, as a block at the end of the prompts whose agents record, check or redo evidence.
-export function qaRulesBlock(qaRules: string | null, base: string): string {
-  return qaRules ? `\n\n## This repo's QA rules (\`factory/qa-rules.md\` on \`${base}\`)\n\n${qaRules}` : ''
-}
-
 export function designValues(design: Design): Record<string, string> {
   return {
     design_dir: design.dir,

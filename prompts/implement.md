@@ -10,11 +10,11 @@ You are implementing one pull request of an approved design. Nobody is watching:
 2. Read the plan section, the design files, the screenshots it must match, and the existing code it names.
 3. Build it test-first, in small commits that each build and pass. Build everything in the section and nothing outside it.
 4. Run every check the plan section and the repo's rules name (build, the listed test suites plus the full existing suites of any shared code you changed, lint, changelog check). Fix what fails. Never disable a test or pass `--no-verify`.
-5. Record whatever UX evidence this repo's QA rules ask for.
+5. Where the repo's rules call for UX evidence: a PR that delivers "Done when" items records a `functional` case (video) whose flow carries those items out from start to finish on staging, including the taps that save. `visual` (screenshots) is only for a restyle of a screen that already works. Make whatever staging data the flow needs to show a realistic screen. Name in your summary any item the recording does not show, and why.
 6. Commit everything. No `Co-Authored-By` or any other co-sign line in commit messages.
 
-**Not yours:** do not push, open a pull request, run a review gate, call Codex, or edit anything under `factory/`. The factory does what comes next.
+**Not yours:** do not push, open a pull request, run a review gate, call Codex, or edit anything under `designs/`. The factory does what comes next.
 
 If a step needs something you do not have (a login, a device, a secret), finish everything else, commit it, and list that step under `blockers`. If the plan cannot be built as written, stop and say exactly why under `blockers`.
 
-Return: `status` (`done` only when every change and test in the section is committed and every check passes, else `blocked`), a `summary` of what you built and anything the reviewer should look at, `checks` (each command you ran last and whether it passed), and `blockers` (empty when done).{{qa_rules}}
+Return: `status` (`done` only when every change and test in the section is committed and every check passes, else `blocked`), a `summary` of what you built and anything the reviewer should look at, `checks` (each command you ran last and whether it passed), and `blockers` (empty when done).

@@ -19,6 +19,6 @@ You are fixing what two reviewers found in one pull request before it is opened.
 2. Run every check the plan section and the repo's rules name again (build, the listed test suites plus the full existing suites of any shared code you changed, lint, changelog check, and anything the rules require after a later change, such as re-recording stale evidence). Fix what fails. Never disable a test or pass `--no-verify`.
 3. Commit everything. No `Co-Authored-By` or any other co-sign line in commit messages.
 
-**Not yours:** do not push, open a pull request, call Codex, or edit anything under `factory/`.
+**Not yours:** do not push, open a pull request, call Codex, or edit anything under `designs/`.
 
-Return: a `summary` of what changed; `dispositions`, one for every finding id above (`fixed` covers a deletion; `declined` needs the reason); `checks` (each command you ran last and whether it passed); and `blockers` (anything you could not finish, with exactly what you tried; empty otherwise).{{qa_rules}}
+Return: a `summary` of what changed; `dispositions`, one for every finding id above (`fixed` covers a deletion; `declined` needs the reason); `checks` (each command you ran last and whether it passed); and `blockers` (anything you could not finish, with exactly what you tried; empty otherwise).

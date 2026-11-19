@@ -62,7 +62,7 @@ export function reasonsNotBuildable(repo: string, design: Design): string[] {
 }
 
 export function designStatuses(repo: string): { design: string; buildable: boolean; reasons: string[] }[] {
-  const ready = path.join(repo, 'factory', 'ready')
+  const ready = path.join(repo, 'designs', 'ready')
   if (!fs.existsSync(ready)) return []
   return fs.readdirSync(ready).filter((name) => /^\d{3}-/.test(name)).sort().map((name) => {
     let reasons: string[]
