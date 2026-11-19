@@ -28,13 +28,13 @@ and "paid review" wording, the full README walkthrough, `LICENSE`, and the plan 
 **Goal**: `Workshop.afterPush(worktree, command)` runs `sh -c` in the worktree with the bot's `GH_TOKEN` and a 30-minute timeout, throwing with the command's last output on failure; `fingerprint(worktree, glob)` hashes sorted relative path + contents of matched files (`fs.globSync`), `null` when nothing matches; `watchPr` runs the step once per pass right after the PR is read as open. `publishEvidence` and `evidenceStamp` are deleted. `PrReport.afterPushStamp?: string`.
 **Success Criteria**: as "After-push command" in the spec: heads must match, else the pass waits and does nothing else; runs when the stamp is absent (not when empty), or when `whenChanged` matches files whose fingerprint differs; stamp taken after the command; `{pr}` replaced; failure ends `needs attention` with the output, posting nothing, requesting no re-review, merging nothing; the next build retries.
 **Tests**: extend `test/build.test.ts`: runs once when the PR opens; with `whenChanged`, again only after a matched file changes, not for unmatched files; without it never again, including with a stored empty stamp; a command writing into the matched files is not rerun; no matching files neither runs nor clears the stamp; failure blocks replies, re-review and merge, and the next build retries and carries on; differing heads post nothing and do not merge. `realWorkshop.afterPush`: runs in the worktree with the bot token, failure carries the last output.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: README note on `factory/`
 **Goal**: a short section on the repo's `factory/` folder: designs, `config.json` with an example, `qa-rules.md`, and that the after-push command runs repo code with the bot's token so the owner must trust it.
 **Success Criteria**: README matches the spec's folder section; acceptance greps clean.
 **Tests**: grep checks.
-**Status**: Not Started
+**Status**: Complete
 
 ## Checklist: every PR-2 row and test bullet mapped
 
