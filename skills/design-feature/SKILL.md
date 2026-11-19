@@ -18,16 +18,17 @@ factory/ready/<NNN>-<kebab-name>/
 
 No application code is written here. The folder is the truth: every decision made in chat is written into it before moving on.
 
-`factory status <repo>` names anything wrong with a folder's shape or plan; run it whenever unsure. If `factory` is not on the PATH, use `node ~/playola/playola-skills/factory/bin/factory.ts`.
+`factory status <repo>` names anything wrong with a folder's shape or plan; run it whenever unsure. If `factory` is not on the PATH, run `./install.sh` from the factory repo.
 
 If the folder already exists and only lacks a finished plan, go to step 8.
 
 ## 1. Set up
 
-- **Base branch:** the one the owner names (a feature branch such as `feature/recorded-shows`), else the repo default from `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`. Never `main` in a repo whose default is `develop`.
+- **Base branch:** the one the owner names (a feature branch such as `feature/<name>`), else the repo default from `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`. Never `main` in a repo whose default is `develop`.
 - **Fresh base:** `git fetch`, tree clean, and the branch is the base or freshly cut from it. If not, stop and say so; never reset, merge or switch on your own. Work on `<author>/design-<name>`.
-- **Backend:** models and endpoints live in the playola monorepo. From another repo, read them at `/Users/brian/playola/playola` and record its `develop` SHA in `Design.md`.
-- **Canvas:** the repo's `design/*.pen`, read and changed only through the pencil MCP, never with file tools. `get_app_state` failing means Pen.app is not running: ask the owner to open it. Never skip the screens silently.
+- **Repo rules:** read `factory/design-rules.md` if the repo has one, and follow it for the rest of the conversation. It says where the backend lives, which docs to read, how screens are drawn and exported, and what to commit with the folder.
+- **Backend:** if the models and endpoints this design touches live in another repo, `design-rules.md` says where; read them there and record that repo's SHA in `Design.md`.
+- **Screens:** drawn the way `design-rules.md` says. Without one, ask the owner how they will supply each screen as a PNG. Never skip the screens silently.
 
 ## 2. Scope one slice
 
@@ -37,11 +38,11 @@ Record in `Design.md`: who uses it, the intent in two sentences, what is out of 
 
 ## 3. Read what exists
 
-Only what this slice touches: `docs/context/` feature docs, the backend's `MODEL.md` and `ENDPOINTS.md` files, the current screens on the canvas, and the code those screens run on. If the slice replaces a working screen, read that screen's page, model, service, route and tests first, so proven behaviour is kept on purpose.
+Only what this slice touches: the docs `design-rules.md` names, the current screens, and the code those screens run on. If the slice replaces a working screen, read that screen's page, model, service, route and tests first, so proven behaviour is kept on purpose.
 
 ## 4. Screens, one at a time
 
-Ask how many layout directions to explore (3–4 for something substantial, 1–2 for something small). Then draw one screen, wait for the owner's explicit approval, and only then draw the next. New frames go in a labelled zone on the canvas, following `design/DESIGN_STATUS.md` where the repo has one; reuse existing components.
+Ask how many layout directions to explore (3–4 for something substantial, 1–2 for something small). Then draw one screen, wait for the owner's explicit approval, and only then draw the next. New frames follow any layout rules in `design-rules.md`; reuse existing components.
 
 Every screen is drawn or described in each state it can be reached in: **a brand-new unsaved item**, loading, empty, error, and locked or forbidden. Lists are drawn at their real size, with the search or scrolling that implies. Copy is functional (no greetings or encouragement), and primary actions outrank secondary ones visually.
 
@@ -49,7 +50,7 @@ Every screen is drawn or described in each state it can be reached in: **a brand
 
 - **`ApiContract.md`:** every endpoint the design calls, including unchanged ones and the ones existing code already makes on the same path (creating the item, loading it). Each has its method and path, which repo owns it, `unchanged` / `changed` / `new`, and real request and response JSON copied from the backend's docs. Client-side model changes go here too.
 - **`ModelChanges.md`:** every stored field added, changed or removed, with type, nullability, where its value comes from, and the migration or backfill it implies. Default to no new field: anything derivable from existing data is not stored. List the fields you considered and left out, with why.
-- Backend conventions: REST resources, `PUT` never `PATCH`, one source of truth for anything that can change.
+- Backend conventions: those in `design-rules.md` and the backend's own docs; one source of truth for anything that can change.
 
 ## 6. Audit before planning
 
@@ -70,13 +71,13 @@ Write each answer into `Design.md` under `## Decisions`, and correct the screens
 
 `Design.md` holds, in order: title `# <NNN> — <Name>`, the step 2 record, `## Screens` (one `###` per screen and state, with its image link `![…](screenshots/<screen>--<state>.png)`, its address, and how it is reached and left), `## Decisions`, and `## Done when`: a `- [ ]` checklist where each line is one outcome a user could check on a device.
 
-Export every approved frame as PNG into `screenshots/` (pencil `Export`, absolute path, then rename each file to `<screen>--<state>.png`). Every file there must be linked from `Design.md`.
+Save every approved screen as a PNG in `screenshots/`, named `<screen>--<state>.png`, the way `design-rules.md` says. Every file there must be linked from `Design.md`.
 
 ## 8. Implementation plan
 
 Read the code the design builds on, then write `ImplementationPlan.md` with the owner. Anything the design does not settle is a question for the owner (option A, option B, recommendation), and the answer goes into the design files, not only the plan.
 
-Cut the work into PRs built in order. Each leaves the app building with tests passing and can be reviewed on its own. Avoid tiny PRs: every PR costs a paid review, and one PR for a small design is fine. The plan adds nothing the design does not ask for. It names the base branch and any repo bookkeeping the PR must do.
+Cut the work into PRs built in order. Each leaves the app building with tests passing and can be reviewed on its own. Avoid tiny PRs: every PR costs a full review, and one PR for a small design is fine. The plan adds nothing the design does not ask for. It names the base branch and any repo bookkeeping the PR must do.
 
 The factory reads the PRs back out of this file, so keep the layout exactly:
 
@@ -134,7 +135,7 @@ Any later edit to the design or the plan undoes the finish; run finalize again. 
 
 ## 10. Ship
 
-When the owner approves the folder: commit it with the canvas file and open one PR to the base branch, titled `design: <plain English>`, through the normal PR flow. The factory builds from the folder once that PR is merged.
+When the owner approves the folder: commit it, with any design file `design-rules.md` says to commit, and open one PR to the base branch, titled `design: <plain English>`, through the normal PR flow. The factory builds from the folder once that PR is merged.
 
 ## Rules
 
