@@ -1,14 +1,13 @@
 import type { World } from './build.ts'
 import { readDesign } from './design.ts'
-import { designValues, qaRulesBlock, renderPrompt } from './prompts.ts'
-import { fingerprint } from './repo.ts'
-import type { RepoRules } from './repo.ts'
+import { designValues, renderPrompt } from './prompts.ts'
 import type { Claim, PrReport, ReviewReport } from './store.ts'
 import type { PlannedPr } from './types.ts'
 import { branchProblems } from './workshop.ts'
 import type { ReviewItem, Workshop } from './workshop.ts'
 
 const MAX_BOT_ROUNDS = 3
+const RE_REVIEW_BELOW = 4
 
 const SITUATION = {
   open: 'the pull request is open and waiting on what is below.',
@@ -17,17 +16,15 @@ const SITUATION = {
 }
 
 // Stays with one open PR until it is merged or closed: fixes or answers what reviewers say, and merges once the owner approves.
-export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop, reReviewBelow: number, rules: RepoRules): Promise<PrReport> {
+export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop): Promise<PrReport> {
   const { worktree, branch } = report
   if (!report.pullRequest) throw new Error(`PR ${pr.number} has not been opened`)
   const { number, url } = report.pullRequest
   const record = (type: Parameters<World['store']['record']>[0]['type']) =>
     world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type })
   let review: ReviewReport = { rounds: report.review?.rounds ?? [], answered: report.review?.answered ?? [], problems: [] }
-  let afterPushStamp = report.afterPushStamp
-  let held = report.held
   const save = (): PrReport => {
-    const saved: PrReport = { ...report, review, afterPushStamp, held }
+    const saved = { ...report, review }
     world.store.savePrReport(claim.repo, saved)
     return saved
   }
@@ -49,79 +46,24 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
         base: claim.base,
         branch,
         situation: SITUATION[situation].replace('{base}', claim.base),
-        items: labelled.map(({ label, item }) => `- **${label}** [${item.fromOwner ? 'owner' : 'reviewer'}]${item.where ? ` \`${item.where}\`` : ''}\n${item.text.replace(/^/gm, '  > ')}`).join('\n\n') || 'none',
+        items: labelled.map(({ label, item }) => `- **${label}** [${item.fromOwner ? 'owner' : 'bot'}]${item.where ? ` \`${item.where}\`` : ''}\n${item.text.replace(/^/gm, '  > ')}`).join('\n\n') || 'none',
         failed_checks: failedChecks.join(', ') || 'none',
-        qa_rules: qaRulesBlock(rules.qaRules, claim.base),
       }),
       `review-pr-${pr.number}-round-${review.rounds.length + 1}`,
     )
     review = { ...review, rounds: [...review.rounds, { ...wave, head, forBots: failedChecks.length > 0 || items.some((item) => !item.fromOwner) }] }
     return labelled.map(({ label, item }) => ({ label, item, reply: wave.replies.find((candidate) => candidate.id === label) }))
   }
-  // Posts held replies one at a time, saving after each, so a build that stops partway never posts one twice.
-  // A held re-review request is dropped once GitHub shows a score at or above the threshold.
-  const postHeld = (score: number | null | undefined, items: ReviewItem[]) => {
-    const justPosted = new Set<string>()
-    while (held) {
-      const [next, ...rest] = held.replies
-      if (next) {
-        const current = items.find((item) => item.id === next.item.id)
-        const changed = next.item.kind === 'thread' && current !== undefined && (current.latest !== next.item.latest || (current.fromOwner && !next.item.fromOwner))
-        workshop.reply(number, next.item, next.body, next.resolve && !changed)
-        if (!changed) justPosted.add(next.item.id)
-        if (next.item.kind === 'comment') review = { ...review, answered: [...review.answered, next.item.id] }
-        held = { ...held, replies: rest }
-      } else {
-        if (held.reReview && !(score != null && score >= reReviewBelow)) workshop.requestReview(number)
-        held = undefined
-      }
-      save()
-    }
-    return justPosted
-  }
   let toldOwner = false
 
   for (;;) {
     const github = workshop.pullRequestState(number)
     if (github.state !== 'open') return end(github.state)
-    const { afterPush } = rules
-    // With an after-push command, every effect below needs the worktree at GitHub's head, so bring the two together first without rewriting GitHub's branch.
-    if (afterPush && workshop.head(worktree) !== github.head) {
-      const caughtUp = workshop.catchUp(worktree, branch, github.head)
-      if (caughtUp === 'conflicts') {
-        return end('fix failed', [`The branch has new commits both on GitHub and in the worktree, and merging them would conflict. In ${worktree}, merge origin/${branch}, resolve the conflicts and commit, then build again.`])
-      }
-      if (caughtUp === 'pushed' || caughtUp === 'changed') {
-        await workshop.wait()
-        continue
-      }
-    }
-    if (afterPush) {
-      const changed = afterPush.whenChanged ? fingerprint(worktree, afterPush.whenChanged) : null
-      if (afterPushStamp === undefined || (changed !== null && changed !== afterPushStamp)) {
-        const command = afterPush.command.replaceAll('{pr}', String(number))
-        try {
-          await workshop.afterPush(worktree, command)
-        } catch (error) {
-          return end('fix failed', [`The after-push command \`${command}\` failed: ${(error as Error).message}`])
-        }
-        if (workshop.head(worktree) !== github.head) {
-          return end('fix failed', [`The after-push command \`${command}\` made a commit, and it must not commit.`])
-        }
-        afterPushStamp = (afterPush.whenChanged && fingerprint(worktree, afterPush.whenChanged)) ?? ''
-        save()
-      }
-    }
-    let justPosted: Set<string> | undefined
-    if (held) {
-      justPosted = postHeld(github.greptile?.score, github.items)
-      record('review round')
-    }
-    const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !justPosted?.has(item.id))
     if (github.checks === 'pending') {
       await workshop.wait()
       continue
     }
+    const unanswered = github.items.filter((item) => !review.answered.includes(item.id))
     if (github.approved && github.checks === 'passed' && !github.conflicts) {
       workshop.merge(number, github.head)
       const questions = unanswered.filter((item) => item.fromOwner)
@@ -148,6 +90,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     toldOwner = false
 
+    const recorded = workshop.evidenceStamp(worktree)
     const answers = await ask(items, failedChecks, conflicts ? 'conflicts' : 'open', github.head)
     const wave = review.rounds.at(-1)!
     const problems = [
@@ -160,13 +103,11 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
 
     const pushed = workshop.head(worktree) !== github.head
     if (pushed) workshop.push(worktree, branch)
-    const reReview = pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow
-    held = { replies: answers.map(({ item, reply }) => ({ item: { id: item.id, kind: item.kind, latest: item.latest, fromOwner: item.fromOwner, text: item.text }, body: reply!.reply, resolve: reply!.action === 'fixed' && !item.fromOwner })), reReview }
-    // With an after-push command, a pushed fix's replies wait until the command has succeeded on it.
+    if (pushed && workshop.evidenceStamp(worktree) !== recorded) workshop.publishEvidence(worktree, number)
+    for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
+    if (pushed && github.greptileScore !== null && github.greptileScore < RE_REVIEW_BELOW) workshop.requestReview(number)
+    review = { ...review, answered: [...review.answered, ...items.filter((item) => item.kind === 'comment').map((item) => item.id)] }
     save()
-    if (!(afterPush && pushed)) {
-      postHeld(github.greptile?.score, github.items)
-      record('review round')
-    }
+    record('review round')
   }
 }

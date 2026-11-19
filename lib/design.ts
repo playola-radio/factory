@@ -4,15 +4,15 @@ import type { Design } from './types.ts'
 
 const OPTIONAL_FILES = ['ApiContract.md', 'ModelChanges.md']
 
-// A design sits in factory/ready until the last PR built from it moves it to factory/done.
+// A design sits in designs/ready until the last PR built from it moves it to designs/done.
 function findDesignFolder(repo: string, number: string): string {
   const prefix = `${number.padStart(3, '0')}-`
   const matches = ['ready', 'done'].flatMap((state) => {
-    const dir = path.join(repo, 'factory', state)
-    return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.startsWith(prefix)).map((name) => path.join('factory', state, name)) : []
+    const dir = path.join(repo, 'designs', state)
+    return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.startsWith(prefix)).map((name) => path.join('designs', state, name)) : []
   })
   if (matches.length !== 1) {
-    throw new Error(`Expected one factory/ready/${prefix}* folder in ${repo}, found ${matches.length}: ${matches.join(', ')}`)
+    throw new Error(`Expected one designs/ready/${prefix}* folder in ${repo}, found ${matches.length}: ${matches.join(', ')}`)
   }
   return matches[0]
 }

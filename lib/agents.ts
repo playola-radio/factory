@@ -6,13 +6,14 @@ import type { Vendor } from './types.ts'
 const STAGE_TIMEOUT_MS = 30 * 60 * 1000
 
 export const OTHER_VENDOR: Record<Vendor, Vendor> = { claude: 'codex', codex: 'claude' }
+export const DEFAULT_MODEL: Record<Vendor, string> = { claude: 'opus', codex: 'gpt-6-astra' }
 export const NO_DELEGATION: Record<Vendor, string> = {
   claude: 'Do this work yourself in this Claude session. Do NOT hand any of it to Codex (`codex exec` or any other Codex call), and do not invoke skills.',
   codex: 'Do this work yourself in this Codex session. Do NOT delegate any of it to Claude (`claude -p` or any other Claude invocation). Do not read or follow files under `~/.claude/` or `.claude/skills/`.',
 }
 
 interface StageCall {
-  model?: string
+  model: string
   prompt: string
   schemaFile: string
   cwd: string
@@ -57,7 +58,7 @@ async function runClaude(call: StageCall): Promise<unknown> {
   const schema = fs.readFileSync(call.schemaFile, 'utf8')
   const stdout = await runProcess(
     'claude',
-    ['-p', ...(call.model ? ['--model', call.model] : []), '--output-format', 'stream-json', '--verbose', '--json-schema', schema, ...(call.canWrite ? ['--permission-mode', 'bypassPermissions'] : ['--allowedTools', 'Read,Grep,Glob'])],
+    ['-p', '--model', call.model, '--output-format', 'stream-json', '--verbose', '--json-schema', schema, ...(call.canWrite ? ['--permission-mode', 'bypassPermissions'] : ['--allowedTools', 'Read,Grep,Glob'])],
     call,
   )
   const events = stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line))
@@ -72,7 +73,7 @@ async function runCodex(call: StageCall): Promise<unknown> {
   const lastMessageFile = call.traceFile.replace(/\.jsonl$/, '.last-message.json')
   await runProcess(
     'codex',
-    ['exec', ...(call.model ? ['-m', call.model] : []), '--sandbox', call.canWrite ? 'danger-full-access' : 'read-only', '--json', '--output-schema', call.schemaFile, '-o', lastMessageFile, '-'],
+    ['exec', '-m', call.model, '--sandbox', call.canWrite ? 'danger-full-access' : 'read-only', '--json', '--output-schema', call.schemaFile, '-o', lastMessageFile, '-'],
     call,
   )
   return JSON.parse(fs.readFileSync(lastMessageFile, 'utf8'))

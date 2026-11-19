@@ -1,7 +1,7 @@
 import { NO_DELEGATION } from './agents.ts'
 import type { World } from './build.ts'
 import { readDesign } from './design.ts'
-import { designValues, qaRulesBlock, renderPrompt } from './prompts.ts'
+import { designValues, renderPrompt } from './prompts.ts'
 import type { Claim, GateFinding, GateReport, GateRound, PrReport } from './store.ts'
 import type { PlannedPr } from './types.ts'
 import { branchProblems } from './workshop.ts'
@@ -24,7 +24,7 @@ async function twice<T>(run: () => Promise<{ findings: T[] }>): Promise<Pass<T>>
   }
 }
 
-export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop, qaRules: string | null): Promise<GateReport> {
+export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop): Promise<GateReport> {
   const { worktree } = report
   const event = { repo: claim.repo, design: claim.design, pr: pr.number }
   const values = {
@@ -34,7 +34,6 @@ export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, wor
     base: claim.base,
     branch: report.branch,
     no_delegation: NO_DELEGATION.codex,
-    qa_rules: qaRulesBlock(qaRules, claim.base),
   }
   const rounds: GateRound[] = []
   const end = (state: GateReport['state'], problems: string[] = []): GateReport => {

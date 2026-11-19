@@ -3,8 +3,6 @@ import { isDeepStrictEqual } from 'node:util'
 
 import { readDesign } from './design.ts'
 import { designStatuses, readApprovedPlan } from './readiness.ts'
-import { readRepoRules } from './repo.ts'
-import type { RepoRules } from './repo.ts'
 import type { Claim, Store } from './store.ts'
 import type { PlannedPr } from './types.ts'
 
@@ -52,13 +50,6 @@ export function startOrResume(repo: string, world: World, base: string): BuildRe
   return { state: 'started', design: next.design, claim }
 }
 
-// Called on every refresh of the base checkout, so a rule merged into the base during a long build reaches the next design.
-// The rules are checked before a design is claimed.
-export function nextDesign(view: string, world: World, base: string): { rules: RepoRules; report: BuildReport } {
-  const rules = readRepoRules(view, base)
-  return { rules, report: startOrResume(view, world, base) }
-}
-
 export function abandon(world: World): { state: 'abandoned'; design: string; deleteBeforeBuildingAgain: string[] } | { state: 'nothing in progress' } {
   const claim = world.store.claimFor(world.repoId)
   if (!claim) return { state: 'nothing in progress' }
@@ -93,10 +84,4 @@ export function realWorld(repo: string, store: Store): World {
         .map((line) => line.split('\t')[1].replace('refs/heads/', '')),
     now: () => new Date().toISOString(),
   }
-}
-
-// An explicit --base wins (and keeps the claim's own conflict error); otherwise the base an unfinished design was claimed on;
-// GitHub is asked only when neither is known.
-export function resolveBase(flag: string | undefined, claim: Claim | null, askGitHub: () => string): string {
-  return flag || claim?.base || askGitHub()
 }
