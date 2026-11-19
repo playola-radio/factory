@@ -767,7 +767,7 @@ test('with whenChanged the command runs again only when a matched file changed',
       if (round === 1) record(worktree, '.qa-artifacts/a/result.json', 'second')
       else record(worktree, '.qa-artifacts/a/video.mp4', 'new video')
     },
-    github: [{ items: [OWNER_THREAD] }, { items: [OWNER_THREAD] }, { approved: true }],
+    github: [{ items: [OWNER_THREAD] }, { items: [OWNER_THREAD, OWNER_COMMENT] }, { approved: true }],
   })
   assert.equal(round, 2)
   assert.equal(did.afterPushes.length, 2)
@@ -854,6 +854,15 @@ test('answers from an unsynchronized pass are posted after its push and after-pu
   assert.equal(reviewState(await build()), 'merged')
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
   assert.deepEqual([reviewPrompts.length, did.reReviews, did.afterPushes.length], [2, 1, 2])
+})
+
+test("an owner's thread whose held reply is posted is not answered again in the same pass", async () => {
+  const { replies, reviewPrompts } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    github: [{ items: [OWNER_THREAD] }, { items: [OWNER_THREAD] }, { state: 'closed' }],
+  })
+  assert.deepEqual([replies.length, reviewPrompts.length], [1, 1])
 })
 
 test('a failed after-push command after a review fix leaves its replies and re-review unposted', async () => {

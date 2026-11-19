@@ -89,7 +89,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     let justPosted: Set<string> | undefined
     if (held && synced) {
-      justPosted = new Set(held.answers.filter(({ item }) => !item.fromOwner).map(({ item }) => item.id))
+      justPosted = new Set(held.answers.map(({ item }) => item.id))
       post(held.answers, held.reReview)
       held = undefined
       save()
