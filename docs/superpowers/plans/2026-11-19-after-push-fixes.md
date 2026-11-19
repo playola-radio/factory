@@ -20,7 +20,7 @@ merged; owner push with held replies → replies post after the catch-up; unpush
 merged; diverged → merged and pushed, then merged; diverged with a conflict → `fix failed` with the reason, nothing
 posted or merged. `realWorkshop.catchUp` against real git repos (a bare remote and two clones): fast-forward, push,
 merge + push, conflict aborted and reported.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Held replies survive the end of a build
 **Goal**: `PrReport.held?: { replies: { item: ReviewItem; body: string; resolve: boolean }[]; reReview: boolean }`,

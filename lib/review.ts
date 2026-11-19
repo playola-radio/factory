@@ -69,9 +69,18 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     const github = workshop.pullRequestState(number)
     if (github.state !== 'open') return end(github.state)
     const { afterPush } = rules
-    // Until the worktree matches GitHub and the after-push command has run on it, a pass may fix and push but posts nothing and cannot merge.
-    const synced = !afterPush || workshop.head(worktree) === github.head
-    if (afterPush && synced) {
+    // With an after-push command, every effect below needs the worktree at GitHub's head, so bring the two together first without rewriting GitHub's branch.
+    if (afterPush && workshop.head(worktree) !== github.head) {
+      const caughtUp = workshop.catchUp(worktree, branch, github.head)
+      if (caughtUp === 'conflicts') {
+        return end('fix failed', [`The branch has new commits both on GitHub and in the worktree, and merging them would conflict. In ${worktree}, merge origin/${branch}, resolve the conflicts and commit, then build again.`])
+      }
+      if (caughtUp === 'pushed') {
+        await workshop.wait()
+        continue
+      }
+    }
+    if (afterPush) {
       const changed = afterPush.whenChanged ? fingerprint(worktree, afterPush.whenChanged) : null
       if (afterPushStamp === undefined || (changed !== null && changed !== afterPushStamp)) {
         const command = afterPush.command.replaceAll('{pr}', String(number))
@@ -88,7 +97,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       }
     }
     let justPosted: Set<string> | undefined
-    if (held && synced) {
+    if (held) {
       justPosted = new Set(held.answers.map(({ item }) => item.id))
       post(held.answers, held.reReview)
       held = undefined
@@ -100,7 +109,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       await workshop.wait()
       continue
     }
-    if (synced && github.approved && github.checks === 'passed' && !github.conflicts) {
+    if (github.approved && github.checks === 'passed' && !github.conflicts) {
       workshop.merge(number, github.head)
       const questions = unanswered.filter((item) => item.fromOwner)
       if (questions.length > 0) {
@@ -139,10 +148,9 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     const pushed = workshop.head(worktree) !== github.head
     if (pushed) workshop.push(worktree, branch)
     const reReview = pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow
-    if (afterPush && (pushed || !synced)) held = { answers: [...(held?.answers ?? []), ...answers], reReview: held?.reReview || reReview }
+    if (afterPush && pushed) held = { answers: [...(held?.answers ?? []), ...answers], reReview: held?.reReview || reReview }
     else post(answers, reReview)
     save()
     if (!held) record('review round')
-    if (!synced) continue
   }
 }

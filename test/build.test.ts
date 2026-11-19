@@ -227,7 +227,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 const NO_RULES: RepoRules = { afterPush: null, qaRules: null }
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; reReviewBelow?: number; rules?: RepoRules } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; catchUp?: 'behind' | 'diverged' | 'conflicts'; reReviewBelow?: number; rules?: RepoRules } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -289,6 +289,20 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       steps.push('after push')
       const run = did.afterPushes.push(command)
       options.afterPush?.(worktree, run, () => { head = `after-push-${run}` })
+    },
+    // Unless told otherwise, the worktree holds commits GitHub does not have.
+    catchUp: (_worktree, _branch, theirs) => {
+      steps.push('catch up')
+      const how = options.catchUp ?? 'ahead'
+      if (how === 'conflicts') return 'conflicts'
+      if (how === 'behind') {
+        head = theirs
+        return 'fast-forwarded'
+      }
+      if (how === 'diverged') head = `merge-${theirs}`
+      did.pushed += 1
+      pushedHead = head
+      return 'pushed'
     },
     pullRequestState: () => ({ state: 'open', head: pushedHead, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptile: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
     answerReview: async (worktree, prompt) => {
@@ -822,9 +836,51 @@ test('an after-push command that commits fails without storing its stamp or merg
   assert.deepEqual([did.merged, storedStamp(world)], [0, undefined])
 })
 
-test("while the worktree's head differs from GitHub's, nothing is run, posted or merged", async () => {
-  const { did, replies } = await buildPr({ rules: PUBLISH, github: [{ approved: true, head: 'someone-else', items: [OWNER_COMMENT], greptile: { score: 0 } }, { state: 'closed' }] })
-  assert.deepEqual([did.afterPushes.length, did.merged, replies.length, did.reReviews], [0, 0, 0, 0])
+test("an owner's push to the PR branch is caught up with, and the PR merges without running the command again", async () => {
+  const { did, steps } = await buildPr({ rules: PUBLISH, catchUp: 'behind', github: [{}, { head: 'owner-push', approved: true }, { state: 'closed' }] })
+  assert.deepEqual(steps.slice(2), ['after push', 'catch up'])
+  assert.deepEqual([did.afterPushes.length, did.pushed, did.mergedHeads], [1, 0, ['owner-push']])
+})
+
+test('a PR whose first look at GitHub is already behind an owner push catches up, then runs the command for the first time', async () => {
+  const { did, steps } = await buildPr({ rules: PUBLISH, catchUp: 'behind', github: [{ head: 'owner-push', approved: true }, { state: 'closed' }] })
+  assert.deepEqual(steps.slice(2), ['catch up', 'after push'])
+  assert.deepEqual(did.mergedHeads, ['owner-push'])
+})
+
+test('replies held for a pushed fix are posted once the worktree has caught up with an owner push on top of it', async () => {
+  const bot = { items: [BOT_THREAD], greptile: { score: 0 } }
+  const { did, replies, reviewPrompts } = await buildPr({ rules: PUBLISH, catchUp: 'behind', github: [bot, { ...bot, head: 'owner-push', approved: true }, { state: 'closed' }] })
+  assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
+  assert.deepEqual([reviewPrompts.length, did.reReviews, did.mergedHeads], [1, 1, ['owner-push']])
+})
+
+test('commits a failed fix left unpushed are pushed by the next build, which then carries on', async () => {
+  const answer = { checks: [{ command: 'make lint', passed: false }] }
+  const { did, steps, build } = await buildPr({ rules: PUBLISH, answer, github: [{ items: [BOT_THREAD] }, { approved: true }] })
+  assert.equal(did.pushed, 0)
+  assert.equal(reviewState(await build()), 'merged')
+  assert.ok(steps.includes('catch up'))
+  assert.deepEqual([did.pushed, did.mergedHeads], [1, ['fix-1']])
+})
+
+test('a branch that changed on both sides is merged and pushed, then the PR carries on', async () => {
+  const { did } = await buildPr({ rules: PUBLISH, catchUp: 'diverged', github: [{ head: 'owner-push' }, { approved: true }] })
+  assert.deepEqual([did.pushed, did.afterPushes.length, did.mergedHeads], [1, 1, ['merge-owner-push']])
+})
+
+test('a branch that changed on both sides and conflicts needs attention, with nothing run, posted or merged', async () => {
+  const { report, did, replies, events } = await buildPr({ rules: PUBLISH, catchUp: 'conflicts', github: [{ head: 'owner-push', approved: true, items: [OWNER_COMMENT], greptile: { score: 0 } }] })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.match(('review' in report && report.review?.problems.join('\n')) || '', /new commits both on GitHub and in the worktree[\s\S]*conflict/)
+  assert.deepEqual([did.afterPushes.length, did.merged, did.pushed, replies.length, did.reReviews], [0, 0, 0, 0, 0])
+  assert.equal(events().at(-1), 'pr needs attention')
+})
+
+test('with no after-push command the worktree is not caught up with GitHub', async () => {
+  const { did, steps } = await buildPr({ github: [{ head: 'owner-push', approved: true }] })
+  assert.ok(!steps.includes('catch up'))
+  assert.deepEqual(did.mergedHeads, ['owner-push'])
 })
 
 test('a review fix left unpushed by a failed check is retried on the next build and posted only once GitHub has it; the stored empty stamp keeps the command from running again', async () => {
@@ -834,7 +890,7 @@ test('a review fix left unpushed by a failed check is retried on the next build 
   assert.deepEqual([did.pushed, replies.length], [0, 0])
   answer.checks = []
   assert.equal(reviewState(await build()), 'merged')
-  assert.deepEqual([reviewPrompts.length, did.pushed, replies.length, did.reReviews, did.afterPushes.length], [2, 1, 1, 1, 1])
+  assert.deepEqual([reviewPrompts.length, did.pushed, replies.length, did.reReviews, did.afterPushes.length], [2, 2, 1, 1, 1])
 })
 
 test('answers from an unsynchronized pass are posted after its push and after-push command succeed', async () => {
@@ -899,4 +955,68 @@ test('the after-push command runs in the worktree with the bot token and fails w
   } finally {
     restore()
   }
+})
+
+const AUTHOR = { GIT_AUTHOR_NAME: 'Owner', GIT_AUTHOR_EMAIL: 'owner@example.com', GIT_COMMITTER_NAME: 'Owner', GIT_COMMITTER_EMAIL: 'owner@example.com' }
+const gitIn = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: 'pipe', env: { ...process.env, ...AUTHOR } }).trim()
+const commitIn = (dir: string, file: string, text: string) => {
+  fs.writeFileSync(path.join(dir, file), text)
+  gitIn(dir, 'add', file)
+  gitIn(dir, 'commit', '-m', `change ${file}`)
+  return gitIn(dir, 'rev-parse', 'HEAD')
+}
+
+// A PR branch on a local remote, the factory's worktree of it, and the owner's own clone.
+function prBranchOnBothSides() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-catch-up-'))
+  const remote = path.join(root, 'remote.git')
+  execFileSync('git', ['init', '-q', '--bare', remote])
+  const worktree = path.join(root, 'worktree')
+  const owner = path.join(root, 'owner')
+  execFileSync('git', ['clone', '-q', remote, worktree], { stdio: 'pipe' })
+  gitIn(worktree, 'checkout', '-q', '-b', 'pr')
+  commitIn(worktree, 'a.txt', 'first\n')
+  gitIn(worktree, 'push', '-q', 'origin', 'pr')
+  execFileSync('git', ['clone', '-q', '-b', 'pr', remote, owner], { stdio: 'pipe' })
+  const real = realWorkshop('/tmp/repo', 'owner/app', '/tmp/worktrees', '/tmp/runs', SETTINGS)
+  const workshop: Workshop = { ...real, push: (dir, branch) => void gitIn(dir, 'push', '-q', 'origin', branch) }
+  const onGitHub = () => gitIn(remote, 'rev-parse', 'pr')
+  return { worktree, owner, workshop, onGitHub }
+}
+
+test('catching up with an owner push fast-forwards the worktree', () => {
+  const { worktree, owner, workshop } = prBranchOnBothSides()
+  const theirs = commitIn(owner, 'b.txt', 'owner\n')
+  gitIn(owner, 'push', '-q', 'origin', 'pr')
+  assert.equal(workshop.catchUp(worktree, 'pr', theirs), 'fast-forwarded')
+  assert.equal(gitIn(worktree, 'rev-parse', 'HEAD'), theirs)
+})
+
+test('catching up pushes commits only the worktree has', () => {
+  const { worktree, workshop, onGitHub } = prBranchOnBothSides()
+  const theirs = onGitHub()
+  const ours = commitIn(worktree, 'b.txt', 'fix\n')
+  assert.equal(workshop.catchUp(worktree, 'pr', theirs), 'pushed')
+  assert.equal(onGitHub(), ours)
+})
+
+test("catching up a branch changed on both sides merges GitHub's commits in as the bot and pushes, keeping the owner's", () => {
+  const { worktree, owner, workshop, onGitHub } = prBranchOnBothSides()
+  const theirs = commitIn(owner, 'b.txt', 'owner\n')
+  gitIn(owner, 'push', '-q', 'origin', 'pr')
+  const ours = commitIn(worktree, 'c.txt', 'fix\n')
+  assert.equal(workshop.catchUp(worktree, 'pr', theirs), 'pushed')
+  const merged = gitIn(worktree, 'rev-parse', 'HEAD')
+  assert.equal(onGitHub(), merged)
+  assert.deepEqual(gitIn(worktree, 'rev-parse', 'HEAD^1', 'HEAD^2').split('\n'), [ours, theirs])
+  assert.equal(gitIn(worktree, 'log', '-1', '--format=%an'), 'Bot')
+})
+
+test('a branch changed on both sides that conflicts is left as it was, on GitHub and in the worktree', () => {
+  const { worktree, owner, workshop, onGitHub } = prBranchOnBothSides()
+  const theirs = commitIn(owner, 'a.txt', 'owner\n')
+  gitIn(owner, 'push', '-q', 'origin', 'pr')
+  const ours = commitIn(worktree, 'a.txt', 'fix\n')
+  assert.equal(workshop.catchUp(worktree, 'pr', theirs), 'conflicts')
+  assert.deepEqual([gitIn(worktree, 'rev-parse', 'HEAD'), onGitHub(), gitIn(worktree, 'status', '--porcelain')], [ours, theirs, ''])
 })

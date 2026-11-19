@@ -62,6 +62,8 @@ export interface Workshop {
   pullRequestState(number: number): PullRequestState
   answerReview(worktree: string, prompt: string, step: string): Promise<ReviewWave>
   push(worktree: string, branch: string): void
+  // Brings the worktree and the PR branch on GitHub to the same commit, never rewriting GitHub's: fast-forwards to it, pushes local commits on top of it, or merges the two and pushes. A conflicting merge is undone.
+  catchUp(worktree: string, branch: string, theirs: string): 'fast-forwarded' | 'pushed' | 'conflicts'
   // Marks a comment as seen with an eyes reaction.
   acknowledge(item: ReviewItem): void
   reply(number: number, item: ReviewItem, body: string, resolve: boolean): void
@@ -217,6 +219,25 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     },
     push(worktree, branch) {
       execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], asBot(worktree))
+    },
+    catchUp(worktree, branch, theirs) {
+      git(worktree, 'fetch', 'origin', branch)
+      const isAncestor = (older: string, newer: string) => spawnSync('git', ['-C', worktree, 'merge-base', '--is-ancestor', older, newer]).status === 0
+      if (isAncestor('HEAD', theirs)) {
+        git(worktree, 'merge', '--ff-only', theirs)
+        return 'fast-forwarded'
+      }
+      if (!isAncestor(theirs, 'HEAD')) {
+        try {
+          execFileSync('git', ['-C', worktree, 'merge', '--no-edit', theirs], { stdio: 'pipe', env: { ...process.env, ...botEnv } })
+        } catch (error) {
+          if (git(worktree, 'diff', '--name-only', '--diff-filter=U') === '') throw new Error(`Could not merge ${theirs} into ${worktree}: ${(error as Error).message}`)
+          git(worktree, 'merge', '--abort')
+          return 'conflicts'
+        }
+      }
+      this.push(worktree, branch)
+      return 'pushed'
     },
     pullRequestState(number) {
       const [repoOwner, name] = repoId.split('/')
