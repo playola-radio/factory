@@ -227,7 +227,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; reReviewBelow?: number; rules?: RepoRules } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number) => void; reReviewBelow?: number; rules?: RepoRules } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -243,7 +243,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const github = [...(options.github ?? [{ approved: true }])]
   const reviewPrompts: string[] = []
   const replies: { id: string; body: string; resolved: boolean }[] = []
-  const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, evidencePosts: 0 }
+  const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, afterPushes: [] as string[] }
   const steps: string[] = []
   let head = 'abc'
   const workshop: Workshop = {
@@ -283,11 +283,15 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       opened.push({ branch, base, title, body })
       return { number: 7, url: 'https://github.com/owner/app/pull/7' }
     },
-    evidenceStamp: () => (options.reRecords ? head : 'same'),
-    publishEvidence: () => void (did.evidencePosts += 1),
+    afterPush: (worktree, command) => {
+      steps.push('after push')
+      const run = did.afterPushes.push(command)
+      options.afterPush?.(worktree, run)
+    },
     pullRequestState: () => ({ state: 'open', head, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptile: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
-    answerReview: async (_worktree, prompt) => {
+    answerReview: async (worktree, prompt) => {
       reviewPrompts.push(prompt)
+      options.whileAnswering?.(worktree)
       const action = options.answerAction ?? 'fixed'
       if (action === 'fixed') head = `fix-${reviewPrompts.length}`
       const ids = [...prompt.matchAll(/\*\*(R\d+)\*\*/g)].map((match) => match[1])
@@ -515,7 +519,7 @@ test("a bot's finding is fixed, pushed, answered in its thread, resolved, and re
   const { report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptile: { score: 0 } }, { approved: true }] })
   assert.match(reviewPrompts[0], /\*\*R1\*\* \[reviewer\] `App.swift:9`\n  > greptile-apps: this breaks a repo rule/)
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
-  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, evidencePosts: 0 })
+  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, afterPushes: [] })
   assert.equal(reviewState(report), 'merged')
 })
 
@@ -672,16 +676,6 @@ test("QA rules written into the PR's worktree are never used: only the base's ar
   assert.match(reviewPrompts[0], QA_BLOCK)
 })
 
-test('evidence recorded again during a fix is posted to the PR after the push', async () => {
-  const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }], reRecords: true })
-  assert.deepEqual([did.pushed, did.evidencePosts], [1, 1])
-})
-
-test('a fix that records nothing new posts no evidence', async () => {
-  const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }] })
-  assert.deepEqual([did.pushed, did.evidencePosts], [1, 0])
-})
-
 test("the owner's comment gets an eyes reaction before work on it starts, and a bot's does not", async () => {
   const { steps } = await buildPr({ github: [{ items: [OWNER_THREAD, BOT_THREAD] }, { approved: true }] })
   assert.deepEqual(steps.filter((step) => step.startsWith('eyes')), [`eyes on ${OWNER_THREAD.id}`])
@@ -724,4 +718,108 @@ test('logins are matched without regard to case', { concurrency: false }, () => 
   })
   assert.equal(state.approved, true)
   assert.deepEqual(state.items, [])
+})
+
+const PUBLISH: RepoRules = { afterPush: { command: 'publish {pr}' }, qaRules: null }
+const PUBLISH_CHANGED: RepoRules = { afterPush: { command: 'publish {pr}', whenChanged: '.qa-artifacts/*/result.json' }, qaRules: null }
+const record = (worktree: string, file: string, text: string) => {
+  fs.mkdirSync(path.dirname(path.join(worktree, file)), { recursive: true })
+  fs.writeFileSync(path.join(worktree, file), text)
+}
+const storedStamp = (world: World) => world.store.prReport(world.repoId, 1)?.afterPushStamp
+
+test('the after-push command runs once when the PR opens, with the PR number, before the merge', async () => {
+  const { did, steps, world } = await buildPr({ rules: PUBLISH })
+  assert.deepEqual(did.afterPushes, ['publish 7'])
+  assert.deepEqual(steps, ['design marked built', 'opened', 'after push'])
+  assert.equal(did.merged, 1)
+  assert.equal(storedStamp(world), '')
+})
+
+test('with no after-push command nothing is run', async () => {
+  const { did } = await buildPr()
+  assert.deepEqual(did.afterPushes, [])
+})
+
+test('without whenChanged the command never runs again, even after a fix is pushed', async () => {
+  const { did } = await buildPr({ rules: PUBLISH, github: [{ items: [OWNER_THREAD] }, { approved: true }] })
+  assert.deepEqual([did.pushed, did.afterPushes.length], [1, 1])
+})
+
+test('without whenChanged a stored empty stamp counts as having run', async () => {
+  const { did, build } = await buildPr({ rules: PUBLISH, github: [{ items: [BOT_THREAD] }, { approved: true }], answer: { checks: [{ command: 'make lint', passed: false }] } })
+  await build()
+  assert.deepEqual([did.afterPushes.length, did.merged], [1, 1])
+})
+
+test('with whenChanged the command runs again only when a matched file changed', async () => {
+  let round = 0
+  const { did } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileImplementing: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'first'),
+    whileAnswering: (worktree) => {
+      round += 1
+      if (round === 1) record(worktree, '.qa-artifacts/a/result.json', 'second')
+      else record(worktree, '.qa-artifacts/a/video.mp4', 'new video')
+    },
+    github: [{ items: [OWNER_THREAD] }, { items: [OWNER_THREAD] }, { approved: true }],
+  })
+  assert.equal(round, 2)
+  assert.equal(did.afterPushes.length, 2)
+})
+
+test('a command that writes into the matched files is not run again for its own writes', async () => {
+  const { did } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    afterPush: (worktree, run) => record(worktree, '.qa-artifacts/a/result.json', `published ${run}`),
+    github: [{}, {}, { approved: true }],
+  })
+  assert.deepEqual([did.afterPushes.length, did.merged], [1, 1])
+})
+
+test('when no file matches, the command does not run and the stored stamp is kept', async () => {
+  const { did, world } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileImplementing: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'first'),
+    whileAnswering: (worktree) => fs.rmSync(path.join(worktree, '.qa-artifacts'), { recursive: true }),
+    answerAction: 'answered',
+    github: [{ items: [OWNER_THREAD] }, { approved: true }],
+  })
+  assert.deepEqual([did.afterPushes.length, did.merged], [1, 1])
+  assert.match(storedStamp(world) ?? '', /^[0-9a-f]{64}$/)
+})
+
+test('a failed after-push command needs attention and blocks replies, re-review and merge; the next build retries and carries on', async () => {
+  const { report, did, replies, reviewPrompts, events, build, world } = await buildPr({
+    rules: PUBLISH,
+    afterPush: (_worktree, run) => {
+      if (run === 1) throw new Error('publish failed:\nno evidence found')
+    },
+    github: [{ approved: true, items: [OWNER_COMMENT], greptile: { score: 0 } }],
+  })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.match(('review' in report && report.review?.problems.join('\n')) || '', /publish 7[\s\S]*no evidence found/)
+  assert.deepEqual([did.merged, did.reReviews, replies.length, reviewPrompts.length], [0, 0, 0, 0])
+  assert.equal(events().at(-1), 'pr needs attention')
+  assert.equal(storedStamp(world), undefined)
+  await build()
+  assert.deepEqual([did.afterPushes.length, did.merged], [2, 1])
+  assert.equal(storedStamp(world), '')
+})
+
+test("while the worktree's head differs from GitHub's, nothing is run, posted or merged", async () => {
+  const { did, replies, reviewPrompts } = await buildPr({ rules: PUBLISH, github: [{ approved: true, head: 'someone-else', items: [OWNER_COMMENT] }, { state: 'closed' }] })
+  assert.deepEqual([did.afterPushes.length, did.merged, replies.length, reviewPrompts.length, did.waits], [0, 0, 0, 0, 1])
+})
+
+test('the after-push command runs in the worktree with the bot token and fails with its last output', { concurrency: false }, () => {
+  const { workshop, restore } = workshopWithGitHubResponse(githubResponse())
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-after-push-'))
+  try {
+    workshop.afterPush(worktree, 'printf "%s" "$GH_TOKEN" > token.txt')
+    assert.equal(fs.readFileSync(path.join(worktree, 'token.txt'), 'utf8'), 'token')
+    assert.throws(() => workshop.afterPush(worktree, 'echo first; echo stale evidence >&2; exit 3'), /exit 3[\s\S]*stale evidence/)
+  } finally {
+    restore()
+  }
 })

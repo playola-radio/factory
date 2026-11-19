@@ -1,6 +1,7 @@
 import type { World } from './build.ts'
 import { readDesign } from './design.ts'
 import { designValues, qaRulesBlock, renderPrompt } from './prompts.ts'
+import { fingerprint } from './repo.ts'
 import type { RepoRules } from './repo.ts'
 import type { Claim, PrReport, ReviewReport } from './store.ts'
 import type { PlannedPr } from './types.ts'
@@ -23,8 +24,9 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
   const record = (type: Parameters<World['store']['record']>[0]['type']) =>
     world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type })
   let review: ReviewReport = { rounds: report.review?.rounds ?? [], answered: report.review?.answered ?? [], problems: [] }
+  let afterPushStamp = report.afterPushStamp
   const save = (): PrReport => {
-    const saved = { ...report, review }
+    const saved = { ...report, review, ...(afterPushStamp === undefined ? {} : { afterPushStamp }) }
     world.store.savePrReport(claim.repo, saved)
     return saved
   }
@@ -60,6 +62,24 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
   for (;;) {
     const github = workshop.pullRequestState(number)
     if (github.state !== 'open') return end(github.state)
+    const { afterPush } = rules
+    if (afterPush) {
+      if (workshop.head(worktree) !== github.head) {
+        await workshop.wait()
+        continue
+      }
+      const changed = afterPush.whenChanged ? fingerprint(worktree, afterPush.whenChanged) : null
+      if (afterPushStamp === undefined || (changed !== null && changed !== afterPushStamp)) {
+        const command = afterPush.command.replaceAll('{pr}', String(number))
+        try {
+          workshop.afterPush(worktree, command)
+        } catch (error) {
+          return end('fix failed', [`The after-push command \`${command}\` failed: ${(error as Error).message}`])
+        }
+        afterPushStamp = (afterPush.whenChanged && fingerprint(worktree, afterPush.whenChanged)) ?? ''
+        save()
+      }
+    }
     if (github.checks === 'pending') {
       await workshop.wait()
       continue
@@ -91,7 +111,6 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     toldOwner = false
 
-    const recorded = workshop.evidenceStamp(worktree)
     const answers = await ask(items, failedChecks, conflicts ? 'conflicts' : 'open', github.head)
     const wave = review.rounds.at(-1)!
     const problems = [
@@ -104,7 +123,6 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
 
     const pushed = workshop.head(worktree) !== github.head
     if (pushed) workshop.push(worktree, branch)
-    if (pushed && workshop.evidenceStamp(worktree) !== recorded) workshop.publishEvidence(worktree, number)
     for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
     if (pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow) workshop.requestReview(number)
     review = { ...review, answered: [...review.answered, ...items.filter((item) => item.kind === 'comment').map((item) => item.id)] }

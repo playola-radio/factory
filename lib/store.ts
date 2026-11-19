@@ -103,6 +103,8 @@ export interface PrReport {
   gate?: GateReport
   pullRequest?: PullRequest
   review?: ReviewReport
+  // The whenChanged fingerprint after the after-push command last succeeded; '' when it has nothing to fingerprint. Absent until it first succeeds.
+  afterPushStamp?: string
 }
 
 // The only place that knows where factory state lives, so it can move off this disk later.
