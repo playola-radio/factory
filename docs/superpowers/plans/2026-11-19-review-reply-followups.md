@@ -32,9 +32,10 @@ Push calls checked: `implement.ts` design-move on resume (fixed), `review.ts` cl
 safe: it pushes a branch nobody else has seen yet; a rejected push stops the build loudly, nothing is forced).
 **Success Criteria**: a resumed build whose PR branch moved on GitHub catches up instead of pushing; diverged →
 merged and pushed; conflict → `fix failed` with instructions, and the flag survives to the next build.
-**Tests**: `test/build.test.ts`: resumed last PR, GitHub ahead and diverged → catch-up merges and pushes, no plain
-push, PR merges at the merged head; conflict → `fix failed` with the instructions, the next build (conflict
-resolved) catches up and merges; a review fix whose push finds GitHub moved merges it in, then posts. Existing
-tests unchanged except the fake workshop's `reply`/`resolve` split and its catch-up only modelling GitHub
-movement when GitHub's head is not the one last pushed.
-**Status**: Not Started
+**Tests**: `test/build.test.ts`: resumed last PR whose branch moved on GitHub (diverged) → catch-up merges and
+pushes, no plain push, PR merges at the merged head; conflict → `fix failed` with the instructions, the next build
+(conflict resolved) catches up and merges; a review fix whose push finds GitHub moved merges it in, then posts; a
+review fix whose push conflicts keeps its replies until the next build has pushed it. Existing tests unchanged
+except the fake workshop's `reply`/`resolve` split and its catch-up only modelling GitHub movement when GitHub's
+head is not the one last pushed.
+**Status**: Complete

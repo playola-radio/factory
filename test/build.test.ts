@@ -228,7 +228,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 const NO_RULES: RepoRules = { afterPush: null, qaRules: null }
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; catchUp?: 'behind' | 'diverged' | 'conflicts' | 'changed'; replyFails?: (id: string) => boolean; resolveFails?: (attempt: number) => boolean; allowInitialError?: boolean; reReviewBelow?: number; rules?: RepoRules } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; catchUp?: 'behind' | 'diverged' | 'conflicts' | 'changed'; replyFails?: (id: string) => boolean; resolveFails?: (attempt: number) => boolean; designMovedAgain?: () => boolean; allowInitialError?: boolean; reReviewBelow?: number; rules?: RepoRules } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -281,7 +281,13 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     linesChanged: () => options.lines ?? { added: 5, deleted: 5 },
     commitMessages: () => options.commits ?? ['add the thing'],
     uncommittedFiles: () => options.uncommitted ?? [],
-    markDesignBuilt: () => steps.push('design marked built') === 1,
+    // On a later build, designMovedAgain says the design was back in factory/ready and was moved in a new commit.
+    markDesignBuilt: () => {
+      if (steps.push('design marked built') === 1) return true
+      if (!options.designMovedAgain?.()) return false
+      head = 'design-moved'
+      return true
+    },
     openPullRequest: (_worktree, branch, base, title, body) => {
       steps.push('opened')
       opened.push({ branch, base, title, body })
@@ -293,10 +299,10 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       const run = did.afterPushes.push(command)
       options.afterPush?.(worktree, run, () => { head = `after-push-${run}` })
     },
-    // Unless told otherwise, the worktree holds commits GitHub does not have.
+    // GitHub's branch moved as options.catchUp says only when its head is not the one last pushed; otherwise, or unless told, the worktree holds commits GitHub does not have.
     catchUp: (_worktree, _branch, theirs) => {
       steps.push('catch up')
-      const how = options.catchUp ?? 'ahead'
+      const how = theirs === pushedHead ? 'ahead' : options.catchUp ?? 'ahead'
       if (how === 'conflicts') return 'conflicts'
       if (how === 'changed') return 'changed'
       if (how === 'behind') {
@@ -318,6 +324,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       return { summary: 'answered', replies: ids.map((id) => ({ id, action, reply: `reply to ${id}` })), checks: [], blockers: [], ...options.answer }
     },
     push: () => {
+      steps.push('push')
       did.pushed += 1
       pushedHead = head
     },
@@ -1059,6 +1066,48 @@ test('a build stopped between posting a reply and resolving its thread only reso
   world.store.savePrReport(world.repoId, atResolve[0])
   assert.equal(reviewState(await build()), 'merged')
   assert.deepEqual([replies, resolves], [[{ id: 'T1', body: 'reply to R1', resolved: true }], ['T1', 'T1']])
+})
+
+const unpushedFailure = { answer: { checks: [{ command: 'make lint', passed: false }] }, answerAction: 'answered' as const }
+
+test("a resumed last PR whose branch moved on GitHub merges GitHub's commits into its design move and pushes, never a plain push", async () => {
+  let moved = false
+  const { report, did, steps, world, build } = await buildPr({ ...unpushedFailure, catchUp: 'diverged', designMovedAgain: () => moved, github: [{ items: [OWNER_COMMENT] }, { head: 'owner-push' }, { approved: true }] })
+  assert.equal(reviewState(report), 'fix failed')
+  moved = true
+  assert.equal(reviewState(await build()), 'merged')
+  assert.deepEqual([steps.includes('catch up'), steps.includes('push'), did.mergedHeads], [true, false, ['merge-owner-push']])
+  assert.equal(world.store.prReport(world.repoId, 1)?.mustCatchUp, undefined)
+})
+
+test('a resumed last PR whose design move conflicts with GitHub needs attention, and the build after the owner resolves it pushes and merges', async () => {
+  let moved = true
+  const options = { ...unpushedFailure, catchUp: 'conflicts' as 'conflicts' | undefined, designMovedAgain: () => moved, github: [{ items: [OWNER_COMMENT] }, { head: 'owner-push' }, { head: 'owner-push' }, { approved: true }] }
+  const { did, build } = await buildPr(options)
+  const conflicted = await build()
+  assert.equal(reviewState(conflicted), 'fix failed')
+  assert.match(('review' in conflicted && conflicted.review?.problems.join('\n')) || '', /new commits both on GitHub and in the worktree[\s\S]*merge origin\/factory\/001-first\/pr-1, resolve the conflicts/)
+  assert.deepEqual([did.pushed, did.merged], [0, 0])
+  moved = false
+  options.catchUp = undefined
+  assert.equal(reviewState(await build()), 'merged')
+  assert.deepEqual(did.mergedHeads, ['design-moved'])
+})
+
+test('a review fix whose push finds new commits on GitHub merges them in and pushes before replying', async () => {
+  const { did, replies, steps } = await buildPr({ catchUp: 'diverged', github: [{ head: 'owner-push', items: [BOT_THREAD] }, { approved: true }] })
+  assert.deepEqual([steps.includes('push'), replies.length, did.mergedHeads], [false, 1, ['merge-owner-push']])
+})
+
+test('a review fix whose push conflicts with GitHub keeps its replies until the build after the owner resolves it has pushed', async () => {
+  const options = { catchUp: 'conflicts' as 'conflicts' | undefined, github: [{ head: 'owner-push', items: [BOT_THREAD] }, { head: 'owner-push' }, { approved: true }] }
+  const { report, did, replies, steps, build } = await buildPr(options)
+  assert.equal(reviewState(report), 'fix failed')
+  assert.deepEqual([did.pushed, replies.length], [0, 0])
+  options.catchUp = undefined
+  assert.equal(reviewState(await build()), 'merged')
+  assert.deepEqual([replies.length, did.mergedHeads], [1, ['fix-1']])
+  assert.ok(steps.indexOf('reply') > steps.lastIndexOf('catch up'))
 })
 
 test('the after-push command runs in the worktree with the bot token and fails with its last output', { concurrency: false }, async () => {

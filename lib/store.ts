@@ -114,6 +114,8 @@ export interface PrReport {
   // The whenChanged fingerprint after the after-push command last succeeded; '' when it has nothing to fingerprint. Absent until it first succeeds.
   afterPushStamp?: string
   held?: HeldReplies
+  // The worktree has commits meant for GitHub, so passes catch up with GitHub's branch first even with no after-push command, until the two match.
+  mustCatchUp?: true
 }
 
 // The only place that knows where factory state lives, so it can move off this disk later.

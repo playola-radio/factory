@@ -42,8 +42,9 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   }
   const last = pr === prs.at(-1)
   if (previous?.pullRequest) {
-    if (last && workshop.markDesignBuilt(previous.worktree, claim.design)) workshop.push(previous.worktree, previous.branch)
-    return watchPr(pr, claim, previous, world, workshop, reReviewBelow, rules)
+    const resumed: PrReport = last && workshop.markDesignBuilt(previous.worktree, claim.design) ? { ...previous, mustCatchUp: true } : previous
+    world.store.savePrReport(claim.repo, resumed)
+    return watchPr(pr, claim, resumed, world, workshop, reReviewBelow, rules)
   }
   const openPr = (gated: PrReport): Promise<PrReport> => {
     if (last) workshop.markDesignBuilt(gated.worktree, claim.design)

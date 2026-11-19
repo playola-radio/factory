@@ -27,8 +27,9 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
   let review: ReviewReport = { rounds: report.review?.rounds ?? [], answered: report.review?.answered ?? [], problems: [] }
   let afterPushStamp = report.afterPushStamp
   let held = report.held
+  let mustCatchUp = report.mustCatchUp
   const save = (): PrReport => {
-    const saved: PrReport = { ...report, review, afterPushStamp, held }
+    const saved: PrReport = { ...report, review, afterPushStamp, held, mustCatchUp }
     world.store.savePrReport(claim.repo, saved)
     return saved
   }
@@ -98,21 +99,26 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     return { justPosted }
   }
+  const conflicting = `The branch has new commits both on GitHub and in the worktree, and merging them would conflict. In ${worktree}, merge origin/${branch}, resolve the conflicts and commit, then build again.`
   let toldOwner = false
 
   for (;;) {
     const github = workshop.pullRequestState(number)
     if (github.state !== 'open') return end(github.state)
     const { afterPush } = rules
-    // With an after-push command, every effect below needs the worktree at GitHub's head, so bring the two together first without rewriting GitHub's branch.
-    if (afterPush && workshop.head(worktree) !== github.head) {
-      const caughtUp = workshop.catchUp(worktree, branch, github.head)
-      if (caughtUp === 'conflicts') {
-        return end('fix failed', [`The branch has new commits both on GitHub and in the worktree, and merging them would conflict. In ${worktree}, merge origin/${branch}, resolve the conflicts and commit, then build again.`])
+    // With an after-push command, or commits waiting for GitHub, every effect below needs the worktree at GitHub's head, so bring the two together first without rewriting GitHub's branch.
+    if (afterPush || mustCatchUp) {
+      if (workshop.head(worktree) !== github.head) {
+        const caughtUp = workshop.catchUp(worktree, branch, github.head)
+        if (caughtUp === 'conflicts') return end('fix failed', [conflicting])
+        if (caughtUp === 'pushed' || caughtUp === 'changed') {
+          await workshop.wait()
+          continue
+        }
       }
-      if (caughtUp === 'pushed' || caughtUp === 'changed') {
-        await workshop.wait()
-        continue
+      if (mustCatchUp) {
+        mustCatchUp = undefined
+        save()
       }
     }
     if (afterPush) {
@@ -157,7 +163,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     const conflicts = github.conflicts && workshop.mergeBase(worktree, claim.base) === 'conflicts'
     if (github.conflicts && !conflicts) {
-      workshop.push(worktree, branch)
+      if (workshop.catchUp(worktree, branch, github.head) === 'conflicts') return end('fix failed', [conflicting])
       await workshop.wait()
       continue
     }
@@ -184,11 +190,20 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     if (problems.length > 0) return end('fix failed', problems)
 
     const pushed = workshop.head(worktree) !== github.head
-    if (pushed) workshop.push(worktree, branch)
     const reReview = pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow
     held = { replies: answers.map(({ item, reply }) => ({ item: { id: item.id, kind: item.kind, latest: item.latest, fromOwner: item.fromOwner, text: item.text }, body: reply!.reply, resolve: reply!.action === 'fixed' && !item.fromOwner })), reReview }
-    // With an after-push command, a pushed fix's replies wait until the command has succeeded on it.
+    // The replies are saved before the fix is pushed; until a pass sees the fix on GitHub, it catches up first and so posts nothing early.
+    if (pushed) mustCatchUp = true
     save()
+    if (pushed) {
+      const caughtUp = workshop.catchUp(worktree, branch, github.head)
+      if (caughtUp === 'conflicts') return end('fix failed', [conflicting])
+      if (caughtUp === 'changed') {
+        await workshop.wait()
+        continue
+      }
+    }
+    // With an after-push command, a pushed fix's replies wait until the command has succeeded on it.
     if (!(afterPush && pushed)) {
       const posted = postHeld(github.greptile?.score, github.items)
       record('review round')
