@@ -25,14 +25,14 @@ const MERGE_NOTE = {
 }
 
 // Builds PR after PR, each cut from the base branch once the one before it has merged there.
-export async function buildDesign(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop): Promise<PrBuildReport> {
+export async function buildDesign(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop, reReviewBelow: number): Promise<PrBuildReport> {
   for (;;) {
-    const report = await buildNextPr(prs, claim, world, workshop)
+    const report = await buildNextPr(prs, claim, world, workshop, reReviewBelow)
     if (!('review' in report) || report.review?.state !== 'merged') return report
   }
 }
 
-export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop): Promise<PrBuildReport> {
+export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop, reReviewBelow: number): Promise<PrBuildReport> {
   const pr = prs.find((planned) => world.store.prReport(claim.repo, planned.number)?.review?.state !== 'merged')
   if (!pr) return { state: 'all PRs merged' }
   const previous = world.store.prReport(claim.repo, pr.number)
@@ -42,7 +42,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   const last = pr === prs.at(-1)
   if (previous?.pullRequest) {
     if (last && workshop.markDesignBuilt(previous.worktree, claim.design)) workshop.push(previous.worktree, previous.branch)
-    return watchPr(pr, claim, previous, world, workshop)
+    return watchPr(pr, claim, previous, world, workshop, reReviewBelow)
   }
   const openPr = (gated: PrReport): Promise<PrReport> => {
     if (last) workshop.markDesignBuilt(gated.worktree, claim.design)
@@ -50,7 +50,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
     const opened = { ...gated, pullRequest: workshop.openPullRequest(gated.worktree, gated.branch, claim.base, pr.title, body) }
     world.store.savePrReport(claim.repo, opened)
     world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type: 'pr opened' })
-    return watchPr(pr, claim, opened, world, workshop)
+    return watchPr(pr, claim, opened, world, workshop, reReviewBelow)
   }
   const gate = async (implemented: PrReport): Promise<PrReport> => {
     const gated = { ...implemented, gate: await runGate(pr, claim, implemented, world, workshop) }

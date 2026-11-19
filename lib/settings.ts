@@ -104,3 +104,8 @@ export function loadSettings(home: string): Settings {
   if ('problems' in checked) throw new Error(`${file} has problems:\n${checked.problems.map((problem) => `- ${problem}`).join('\n')}\n${FIX_HINT}`)
   return checked.settings
 }
+
+// finalize only needs the models, so a missing file is fine there; an invalid one is not.
+export function loadSettingsIfPresent(home: string): Settings | null {
+  return fs.existsSync(settingsFile(home)) ? loadSettings(home) : null
+}

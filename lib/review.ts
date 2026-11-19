@@ -7,7 +7,6 @@ import { branchProblems } from './workshop.ts'
 import type { ReviewItem, Workshop } from './workshop.ts'
 
 const MAX_BOT_ROUNDS = 3
-const RE_REVIEW_BELOW = 4
 
 const SITUATION = {
   open: 'the pull request is open and waiting on what is below.',
@@ -16,7 +15,7 @@ const SITUATION = {
 }
 
 // Stays with one open PR until it is merged or closed: fixes or answers what reviewers say, and merges once the owner approves.
-export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop): Promise<PrReport> {
+export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop, reReviewBelow: number): Promise<PrReport> {
   const { worktree, branch } = report
   if (!report.pullRequest) throw new Error(`PR ${pr.number} has not been opened`)
   const { number, url } = report.pullRequest
@@ -46,7 +45,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
         base: claim.base,
         branch,
         situation: SITUATION[situation].replace('{base}', claim.base),
-        items: labelled.map(({ label, item }) => `- **${label}** [${item.fromOwner ? 'owner' : 'bot'}]${item.where ? ` \`${item.where}\`` : ''}\n${item.text.replace(/^/gm, '  > ')}`).join('\n\n') || 'none',
+        items: labelled.map(({ label, item }) => `- **${label}** [${item.fromOwner ? 'owner' : 'reviewer'}]${item.where ? ` \`${item.where}\`` : ''}\n${item.text.replace(/^/gm, '  > ')}`).join('\n\n') || 'none',
         failed_checks: failedChecks.join(', ') || 'none',
       }),
       `review-pr-${pr.number}-round-${review.rounds.length + 1}`,
@@ -105,7 +104,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     if (pushed) workshop.push(worktree, branch)
     if (pushed && workshop.evidenceStamp(worktree) !== recorded) workshop.publishEvidence(worktree, number)
     for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
-    if (pushed && github.greptileScore !== null && github.greptileScore < RE_REVIEW_BELOW) workshop.requestReview(number)
+    if (pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow) workshop.requestReview(number)
     review = { ...review, answered: [...review.answered, ...items.filter((item) => item.kind === 'comment').map((item) => item.id)] }
     save()
     record('review round')

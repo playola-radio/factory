@@ -2,9 +2,10 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { DEFAULT_MODEL, runAgent } from './agents.ts'
+import { runAgent } from './agents.ts'
 import { readDesign } from './design.ts'
 import { reasonsNotBuildable } from './readiness.ts'
+import type { Settings } from './settings.ts'
 import type { FixWave, Implementation, PullRequest, ReviewWave } from './store.ts'
 
 export interface BreakFinding {
@@ -37,7 +38,8 @@ export interface PullRequestState {
   conflicts: boolean
   checks: 'pending' | 'passed' | 'failed'
   failedChecks: string[]
-  greptileScore: number | null
+  // null when Greptile is not in use; a null score means none posted yet or unreadable.
+  greptile: { score: number | null } | null
   items: ReviewItem[]
 }
 
@@ -92,24 +94,29 @@ const IMPLEMENT_TIMEOUT_MS = 4 * 60 * 60 * 1000
 const REVIEW_TIMEOUT_MS = 20 * 60 * 1000
 const schema = (name: string) => path.join(import.meta.dirname, '..', 'schemas', `${name}.json`)
 
-// The account that authors the factory's commits and opens its PRs, so the owner can review and approve them.
-const AUTHOR = { login: 'marge-watson', name: 'Marge', email: '263082108+marge-watson@users.noreply.github.com' }
-// The only account whose approval lets a PR merge.
-const OWNER = 'briankeane'
 const GREPTILE = 'greptile-apps'
 const POLL_MS = 2 * 60 * 1000
-const AUTHOR_ENV = { GIT_AUTHOR_NAME: AUTHOR.name, GIT_AUTHOR_EMAIL: AUTHOR.email, GIT_COMMITTER_NAME: AUTHOR.name, GIT_COMMITTER_EMAIL: AUTHOR.email }
 
-function authorToken(): string {
+export function botToken(login: string): string {
   try {
-    return execFileSync('gh', ['auth', 'token', '--user', AUTHOR.login], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return execFileSync('gh', ['auth', 'token', '--user', login], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
   } catch {
-    throw new Error(`gh is not signed in as ${AUTHOR.login}. Run: gh auth login, sign in as ${AUTHOR.login}, then gh auth switch to go back to your own account.`)
+    throw new Error(`gh is not signed in as ${login}. Run: gh auth login, sign in as ${login}, then gh auth switch to go back to your own account.`)
   }
 }
 
-const asAuthor = (cwd: string) => ({ cwd, encoding: 'utf8' as const, env: { ...process.env, GH_TOKEN: authorToken() } })
-const gh = (...args: string[]) => execFileSync('gh', args, asAuthor(process.cwd())).trim()
+export function defaultBranch(repoId: string, login: string): string {
+  try {
+    const out = execFileSync('gh', ['repo', 'view', repoId, '--json', 'defaultBranchRef'], { encoding: 'utf8', env: { ...process.env, GH_TOKEN: botToken(login) } })
+    const name = JSON.parse(out).defaultBranchRef?.name
+    if (typeof name === 'string' && name) return name
+  } catch {
+    // reported below with the repo named
+  }
+  throw new Error(`Could not ask GitHub for the default branch of ${repoId}. Pass --base <branch>.`)
+}
+
+const sameLogin = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
 const STATE_QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){
   state headRefOid mergeable
@@ -128,13 +135,22 @@ export function baseView(repo: string, worktreesDir: string, base: string): stri
   return view
 }
 
+function scoreOf(body: string): number | null {
+  const score = /Confidence Score: (\d)\/5/.exec(body)?.[1]
+  return score === undefined ? null : Number(score)
+}
+
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' }).trim()
 
-export function realWorkshop(repo: string, repoId: string, worktreesDir: string, runDir: string, model: string): Workshop {
+export function realWorkshop(repo: string, repoId: string, worktreesDir: string, runDir: string, settings: Settings): Workshop {
+  const { owner, bot, greptile, models } = settings
+  const botEnv = { GIT_AUTHOR_NAME: bot.name, GIT_AUTHOR_EMAIL: bot.email, GIT_COMMITTER_NAME: bot.name, GIT_COMMITTER_EMAIL: bot.email }
+  const asBot = (cwd: string) => ({ cwd, encoding: 'utf8' as const, env: { ...process.env, GH_TOKEN: botToken(bot.login) } })
+  const gh = (...args: string[]) => execFileSync('gh', args, asBot(process.cwd())).trim()
   const writer = (schemaName: string, cwd: string, prompt: string, step: string) =>
-    runAgent({ vendor: 'claude', model, prompt, schemaFile: schema(schemaName), cwd, runDir, step, canWrite: true, timeoutMs: IMPLEMENT_TIMEOUT_MS, env: AUTHOR_ENV })
+    runAgent({ vendor: 'claude', model: models.claude, prompt, schemaFile: schema(schemaName), cwd, runDir, step, canWrite: true, timeoutMs: IMPLEMENT_TIMEOUT_MS, env: botEnv })
   const reviewer = (schemaName: string, cwd: string, prompt: string, step: string) =>
-    runAgent({ vendor: 'codex', model: DEFAULT_MODEL.codex, prompt, schemaFile: schema(schemaName), cwd, runDir, step, timeoutMs: REVIEW_TIMEOUT_MS })
+    runAgent({ vendor: 'codex', model: models.codex, prompt, schemaFile: schema(schemaName), cwd, runDir, step, timeoutMs: REVIEW_TIMEOUT_MS })
   return {
     prepareWorktree(base, branch) {
       const worktree = path.join(worktreesDir, branch.replaceAll('/', '__'))
@@ -170,11 +186,11 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       if (!fs.existsSync(path.join(worktree, 'designs', 'ready', design))) return false
       fs.mkdirSync(path.join(worktree, 'designs', 'done'), { recursive: true })
       git(worktree, 'mv', `designs/ready/${design}`, `designs/done/${design}`)
-      execFileSync('git', ['-C', worktree, 'commit', '-m', `chore: mark design ${design} as built`], { env: { ...process.env, ...AUTHOR_ENV } })
+      execFileSync('git', ['-C', worktree, 'commit', '-m', `chore: mark design ${design} as built`], { env: { ...process.env, ...botEnv } })
       return true
     },
     openPullRequest(worktree, branch, base, title, body) {
-      const options = asAuthor(worktree)
+      const options = asBot(worktree)
       const gh = (...args: string[]) => execFileSync('gh', args, options).trim()
       this.push(worktree, branch)
       const existing = JSON.parse(gh('pr', 'list', '-R', repoId, '--head', branch, '--state', 'open', '--json', 'number,url'))[0] as PullRequest | undefined
@@ -191,35 +207,36 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     publishEvidence(worktree, number) {
       const makefile = path.join(worktree, 'Makefile')
       if (!fs.existsSync(makefile) || !/^ux-evidence-publish:/m.test(fs.readFileSync(makefile, 'utf8'))) return
-      execFileSync('make', ['ux-evidence-publish', `PR=${number}`], asAuthor(worktree))
+      execFileSync('make', ['ux-evidence-publish', `PR=${number}`], asBot(worktree))
     },
     push(worktree, branch) {
-      execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], asAuthor(worktree))
+      execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], asBot(worktree))
     },
     pullRequestState(number) {
-      const [owner, name] = repoId.split('/')
-      const pr = JSON.parse(gh('api', 'graphql', '-f', `query=${STATE_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${number}`)).data.repository.pullRequest
+      const [repoOwner, name] = repoId.split('/')
+      const pr = JSON.parse(gh('api', 'graphql', '-f', `query=${STATE_QUERY}`, '-f', `owner=${repoOwner}`, '-f', `name=${name}`, '-F', `number=${number}`)).data.repository.pullRequest
       const checks: { name?: string; context?: string; status?: string; conclusion?: string; state?: string }[] = pr.commits.nodes[0].commit.statusCheckRollup?.contexts.nodes ?? []
       const pending = checks.some((check) => (check.status ?? 'COMPLETED') !== 'COMPLETED' || ['PENDING', 'EXPECTED'].includes(check.state ?? ''))
       const failedChecks = checks
         .filter((check) => ['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'ERROR', 'STARTUP_FAILURE', 'STALE'].includes(check.conclusion ?? check.state ?? ''))
         .map((check) => check.name ?? check.context ?? 'a check')
-        .filter((check) => !/greptile/i.test(check))
+        .filter((check) => !greptile || !/greptile/i.test(check))
       const login = (node: { author: { login: string } | null }) => node.author?.login ?? ''
-      const verdict = pr.reviews.nodes.filter((review: any) => login(review) === OWNER && ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)).at(-1)
-      const greptile = pr.comments.nodes.filter((comment: any) => login(comment) === GREPTILE).at(-1)
+      const isOwner = (node: { author: { login: string } | null }) => sameLogin(login(node), owner)
+      const verdict = pr.reviews.nodes.filter((review: any) => isOwner(review) && ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)).at(-1)
+      const greptileComment = greptile ? pr.comments.nodes.filter((comment: any) => sameLogin(login(comment), GREPTILE)).at(-1) : null
       const threads: ReviewItem[] = pr.reviewThreads.nodes
-        .filter((thread: any) => !thread.isResolved && login(thread.comments.nodes.at(-1)) !== AUTHOR.login)
+        .filter((thread: any) => !thread.isResolved && !sameLogin(login(thread.comments.nodes.at(-1)), bot.login))
         .map((thread: any) => ({
           id: thread.id,
           kind: 'thread',
           latest: thread.comments.nodes.at(-1).id,
-          fromOwner: thread.comments.nodes.some((comment: any) => login(comment) === OWNER),
+          fromOwner: thread.comments.nodes.some((comment: any) => isOwner(comment)),
           where: `${thread.path}${thread.line ? `:${thread.line}` : ''}`,
           text: thread.comments.nodes.map((comment: any) => `${login(comment)}: ${comment.body}`).join('\n\n'),
         }))
       const comments: ReviewItem[] = [...pr.comments.nodes, ...pr.reviews.nodes]
-        .filter((comment: any) => login(comment) === OWNER && comment.body.trim() !== '')
+        .filter((comment: any) => isOwner(comment) && comment.body.trim() !== '')
         .map((comment: any) => ({ id: comment.id, kind: 'comment', latest: comment.id, fromOwner: true, text: comment.body }))
       return {
         state: pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : 'open',
@@ -228,7 +245,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
         conflicts: pr.mergeable === 'CONFLICTING',
         checks: pending ? 'pending' : failedChecks.length > 0 ? 'failed' : 'passed',
         failedChecks,
-        greptileScore: greptile ? Number(/Confidence Score: (\d)\/5/.exec(greptile.body)?.[1] ?? NaN) : null,
+        greptile: greptile ? { score: greptileComment ? scoreOf(greptileComment.body) : null } : null,
         items: [...threads, ...comments],
       }
     },

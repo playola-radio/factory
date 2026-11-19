@@ -13,6 +13,7 @@ import { buildDesign, buildNextPr } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
+import type { Settings } from '../lib/settings.ts'
 import type { Claim, FixWave, Implementation, ReviewWave } from '../lib/store.ts'
 
 function addDesign(repo: string, name: string, planned: boolean) {
@@ -117,7 +118,9 @@ test('the repository is identified the same way from either kind of address', ()
   assert.equal(repoIdFromRemote('https://github.com/owner/app'), 'owner/app')
 })
 
-function workshopWithGitHubResponse(response: object) {
+const SETTINGS: Settings = { owner: 'owner-login', bot: { login: 'bot-login', name: 'Bot', email: '1+bot-login@users.noreply.github.com' }, greptile: { reReviewBelow: 4 }, models: {} }
+
+function workshopWithGitHubResponse(response: object, settings: Settings = SETTINGS) {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-gh-'))
   const gh = path.join(bin, 'gh')
   fs.writeFileSync(gh, `#!/usr/bin/env node
@@ -129,7 +132,7 @@ else process.stdout.write(process.env.FACTORY_GH_RESPONSE)
   const previousResponse = process.env.FACTORY_GH_RESPONSE
   process.env.PATH = `${bin}:${previousPath}`
   process.env.FACTORY_GH_RESPONSE = JSON.stringify(response)
-  const workshop = realWorkshop('/tmp/repo', 'owner/app', '/tmp/worktrees', '/tmp/runs', 'model')
+  const workshop = realWorkshop('/tmp/repo', 'owner/app', '/tmp/worktrees', '/tmp/runs', settings)
   return {
     workshop,
     restore() {
@@ -166,7 +169,7 @@ test('startup failures and stale checks fail the pull request', { concurrency: f
 })
 
 test('owner reviews and comments keep their globally unique IDs', { concurrency: false }, () => {
-  const owner = { login: 'briankeane' }
+  const owner = { login: 'owner-login' }
   const { workshop, restore } = workshopWithGitHubResponse(githubResponse({
     reviews: { nodes: [{ id: 'review-id', databaseId: 5, author: owner, state: 'COMMENTED', body: 'review', commit: { oid: 'abc' } }] },
     comments: { nodes: [{ id: 'comment-id', databaseId: 5, author: owner, body: 'comment' }] },
@@ -255,7 +258,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     },
     evidenceStamp: () => (options.reRecords ? head : 'same'),
     publishEvidence: () => void (did.evidencePosts += 1),
-    pullRequestState: () => ({ state: 'open', head, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptileScore: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
+    pullRequestState: () => ({ state: 'open', head, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptile: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
     answerReview: async (_worktree, prompt) => {
       reviewPrompts.push(prompt)
       const action = options.answerAction ?? 'fixed'
@@ -273,8 +276,8 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     },
     wait: async () => void (did.waits += 1),
   }
-  const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop)
-  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop) }
+  const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop, 4)
+  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, 4) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -447,7 +450,7 @@ test('a PR implemented before the gate existed goes through the gate without bei
 
 const reviewState = (report: Awaited<ReturnType<typeof buildNextPr>>) => ('review' in report ? report.review?.state : undefined)
 const BOT_THREAD: ReviewItem = { id: 'T1', kind: 'thread', latest: 'c1', fromOwner: false, where: 'App.swift:9', text: 'greptile-apps: this breaks a repo rule' }
-const OWNER_THREAD: ReviewItem = { id: 'T2', kind: 'thread', latest: 'c1', fromOwner: true, where: 'App.swift:3', text: 'briankeane: Why not in the other file?' }
+const OWNER_THREAD: ReviewItem = { id: 'T2', kind: 'thread', latest: 'c1', fromOwner: true, where: 'App.swift:3', text: 'owner-login: Why not in the other file?' }
 const OWNER_COMMENT: ReviewItem = { id: 'comment-5', kind: 'comment', latest: 'c1', fromOwner: true, text: 'Rename the button please' }
 
 test('an approved PR with passing checks is merged, and the design goes on until every PR is merged', async () => {
@@ -482,20 +485,20 @@ test('an approved PR with a failing check gets the check fixed instead of being 
 })
 
 test("a bot's finding is fixed, pushed, answered in its thread, resolved, and reviewed again when the score was low", async () => {
-  const { report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptileScore: 0 }, { approved: true }] })
-  assert.match(reviewPrompts[0], /\*\*R1\*\* \[bot\] `App.swift:9`\n  > greptile-apps: this breaks a repo rule/)
+  const { report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptile: { score: 0 } }, { approved: true }] })
+  assert.match(reviewPrompts[0], /\*\*R1\*\* \[reviewer\] `App.swift:9`\n  > greptile-apps: this breaks a repo rule/)
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
   assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, evidencePosts: 0 })
   assert.equal(reviewState(report), 'merged')
 })
 
 test('no second review is asked for when the score was four or more', async () => {
-  const { did } = await buildPr({ github: [{ items: [BOT_THREAD], greptileScore: 4 }, { approved: true }] })
+  const { did } = await buildPr({ github: [{ items: [BOT_THREAD], greptile: { score: 4 } }, { approved: true }] })
   assert.deepEqual([did.pushed, did.reReviews], [1, 0])
 })
 
 test("the owner's question is answered in the thread with no push, and the thread is left for the owner", async () => {
-  const { did, replies } = await buildPr({ github: [{ items: [OWNER_THREAD], greptileScore: 0 }, { state: 'closed' }], answerAction: 'answered' })
+  const { did, replies } = await buildPr({ github: [{ items: [OWNER_THREAD], greptile: { score: 0 } }, { state: 'closed' }], answerAction: 'answered' })
   assert.deepEqual(replies, [{ id: 'T2', body: 'reply to R1', resolved: false }])
   assert.deepEqual([did.pushed, did.reReviews], [0, 0])
 })
