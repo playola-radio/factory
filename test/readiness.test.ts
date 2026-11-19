@@ -10,7 +10,7 @@ import type { PlanContent } from '../lib/plan.ts'
 
 function plannedRepo() {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-ready-'))
-  const dir = path.join(repo, 'designs', 'ready', '001-example')
+  const dir = path.join(repo, 'factory', 'ready', '001-example')
   fs.mkdirSync(path.join(dir, 'screenshots'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'screenshots', 'a--default.png'), 'png')
   fs.writeFileSync(path.join(dir, 'Design.md'), '![a](screenshots/a--default.png)\n\n## Done when\n\n- [ ] first outcome\n')

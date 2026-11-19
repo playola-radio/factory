@@ -52,7 +52,7 @@ export interface Workshop {
   linesChanged(worktree: string, since: string): { added: number; deleted: number }
   commitMessages(worktree: string, base: string): string[]
   uncommittedFiles(worktree: string): string[]
-  // Moves the design to designs/done in one commit; false when it is already there.
+  // Moves the design to factory/done in one commit; false when it is already there.
   markDesignBuilt(worktree: string, design: string): boolean
   openPullRequest(worktree: string, branch: string, base: string, title: string, body: string): PullRequest
   // Changes whenever evidence is recorded again.
@@ -167,9 +167,9 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     commitMessages: (worktree, base) => git(worktree, 'log', '--format=%B%x00', `origin/${base}..HEAD`).split('\0').map((message) => message.trim()).filter(Boolean),
     uncommittedFiles: (worktree) => git(worktree, 'status', '--porcelain').split('\n').filter(Boolean),
     markDesignBuilt(worktree, design) {
-      if (!fs.existsSync(path.join(worktree, 'designs', 'ready', design))) return false
-      fs.mkdirSync(path.join(worktree, 'designs', 'done'), { recursive: true })
-      git(worktree, 'mv', `designs/ready/${design}`, `designs/done/${design}`)
+      if (!fs.existsSync(path.join(worktree, 'factory', 'ready', design))) return false
+      fs.mkdirSync(path.join(worktree, 'factory', 'done'), { recursive: true })
+      git(worktree, 'mv', `factory/ready/${design}`, `factory/done/${design}`)
       execFileSync('git', ['-C', worktree, 'commit', '-m', `chore: mark design ${design} as built`], { env: { ...process.env, ...AUTHOR_ENV } })
       return true
     },
