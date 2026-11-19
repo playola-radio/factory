@@ -93,8 +93,9 @@ export interface ReviewReport {
 }
 
 // Replies to a pushed fix, and whether to ask for another review, waiting for the after-push command to succeed on it.
+// `posted` marks a reply already on GitHub whose thread is still to be resolved, so it is never posted twice.
 export interface HeldReplies {
-  replies: { item: Pick<ReviewItem, 'id' | 'kind' | 'latest' | 'fromOwner' | 'text'>; body: string; resolve: boolean }[]
+  replies: { item: Pick<ReviewItem, 'id' | 'kind' | 'latest' | 'fromOwner' | 'text'>; body: string; resolve: boolean; posted?: true }[]
   reReview: boolean
 }
 

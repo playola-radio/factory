@@ -66,7 +66,8 @@ export interface Workshop {
   catchUp(worktree: string, branch: string, theirs: string): 'fast-forwarded' | 'pushed' | 'conflicts' | 'changed'
   // Marks a comment as seen with an eyes reaction.
   acknowledge(item: ReviewItem): void
-  reply(number: number, item: Pick<ReviewItem, 'id' | 'kind' | 'text'>, body: string, resolve: boolean): void
+  reply(number: number, item: Pick<ReviewItem, 'id' | 'kind' | 'text'>, body: string): void
+  resolve(thread: string): void
   requestReview(number: number): void
   merge(number: number, head: string): void
   wait(): Promise<void>
@@ -330,14 +331,14 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     },
     answerReview: (worktree, prompt, step) => writer('review-fix', worktree, prompt, step) as Promise<ReviewWave>,
     acknowledge: (item) => void gh('api', 'graphql', '-f', 'query=mutation($subject:ID!){addReaction(input:{subjectId:$subject,content:EYES}){reaction{id}}}', '-f', `subject=${item.latest}`),
-    reply(number, item, body, resolve) {
+    reply(number, item, body) {
       if (item.kind === 'comment') {
         gh('pr', 'comment', String(number), '-R', repoId, '--body', `> ${item.text.split('\n')[0]}\n\n${body}`)
         return
       }
       gh('api', 'graphql', '-f', 'query=mutation($thread:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$thread,body:$body}){comment{id}}}', '-f', `thread=${item.id}`, '-f', `body=${body}`)
-      if (resolve) gh('api', 'graphql', '-f', 'query=mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{id}}}', '-f', `thread=${item.id}`)
     },
+    resolve: (thread) => void gh('api', 'graphql', '-f', 'query=mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{id}}}', '-f', `thread=${thread}`),
     requestReview: (number) => void gh('pr', 'comment', String(number), '-R', repoId, '--body', '@greptile review this'),
     merge: (number, head) => void gh('pr', 'merge', String(number), '-R', repoId, '--merge', '--match-head-commit', head),
     wait: () => new Promise((resolve) => setTimeout(resolve, POLL_MS)),

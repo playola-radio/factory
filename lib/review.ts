@@ -9,6 +9,7 @@ import { branchProblems } from './workshop.ts'
 import type { ReviewItem, Workshop } from './workshop.ts'
 
 const MAX_BOT_ROUNDS = 3
+const MAX_RESOLVE_TRIES = 3
 
 const SITUATION = {
   open: 'the pull request is open and waiting on what is below.',
@@ -58,8 +59,10 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     review = { ...review, rounds: [...review.rounds, { ...wave, head, forBots: failedChecks.length > 0 || items.some((item) => !item.fromOwner) }] }
     return labelled.map(({ label, item }) => ({ label, item, reply: wave.replies.find((candidate) => candidate.id === label) }))
   }
-  // Posts held replies one at a time, saving after each, so a build that stops partway never posts one twice.
+  let resolveFailures = 0
+  // Posts held replies one at a time, saving after each step, so a build that stops partway never posts one twice.
   // A held re-review request is dropped once GitHub shows a score at or above the threshold.
+  // Returns why a thread could not be resolved; that reply stays held, as posted, for the next pass to resolve.
   const postHeld = (score: number | null | undefined, items: ReviewItem[]) => {
     const justPosted = new Set<string>()
     while (held) {
@@ -67,9 +70,25 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       if (next) {
         const current = items.find((item) => item.id === next.item.id)
         const changed = next.item.kind === 'thread' && current !== undefined && (current.latest !== next.item.latest || (current.fromOwner && !next.item.fromOwner))
-        workshop.reply(number, next.item, next.body, next.resolve && !changed)
+        const resolve = next.resolve && !changed
+        if (!next.posted) {
+          workshop.reply(number, next.item, next.body)
+          if (next.item.kind === 'comment') review = { ...review, answered: [...review.answered, next.item.id] }
+          if (resolve) {
+            held = { ...held, replies: [{ ...next, posted: true }, ...rest] }
+            save()
+          }
+        }
         if (!changed) justPosted.add(next.item.id)
-        if (next.item.kind === 'comment') review = { ...review, answered: [...review.answered, next.item.id] }
+        if (resolve) {
+          try {
+            workshop.resolve(next.item.id)
+          } catch (error) {
+            resolveFailures += 1
+            return { justPosted, unresolved: `The reply to review thread ${next.item.id} was posted, but resolving the thread failed ${resolveFailures} times (${(error as Error).message}). Resolve it on GitHub, or build again to retry.` }
+          }
+          resolveFailures = 0
+        }
         held = { ...held, replies: rest }
       } else {
         if (held.reReview && !(score != null && score >= reReviewBelow)) workshop.requestReview(number)
@@ -77,7 +96,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       }
       save()
     }
-    return justPosted
+    return { justPosted }
   }
   let toldOwner = false
 
@@ -114,8 +133,14 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     let justPosted: Set<string> | undefined
     if (held) {
-      justPosted = postHeld(github.greptile?.score, github.items)
+      const posted = postHeld(github.greptile?.score, github.items)
       record('review round')
+      if (posted.unresolved) {
+        if (resolveFailures >= MAX_RESOLVE_TRIES) return end('fix failed', [posted.unresolved])
+        await workshop.wait()
+        continue
+      }
+      justPosted = posted.justPosted
     }
     const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !justPosted?.has(item.id))
     if (github.checks === 'pending') {
@@ -126,7 +151,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       workshop.merge(number, github.head)
       const questions = unanswered.filter((item) => item.fromOwner)
       if (questions.length > 0) {
-        for (const { item, reply } of await ask(questions, [], 'merged', github.head)) if (reply) workshop.reply(number, item, reply.reply, false)
+        for (const { item, reply } of await ask(questions, [], 'merged', github.head)) if (reply) workshop.reply(number, item, reply.reply)
       }
       return end('merged')
     }
@@ -165,8 +190,10 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     // With an after-push command, a pushed fix's replies wait until the command has succeeded on it.
     save()
     if (!(afterPush && pushed)) {
-      postHeld(github.greptile?.score, github.items)
+      const posted = postHeld(github.greptile?.score, github.items)
       record('review round')
+      // The next pass tries the resolve again.
+      if (posted.unresolved) await workshop.wait()
     }
   }
 }

@@ -16,7 +16,7 @@ import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Worksho
 import type { RepoRules } from '../lib/repo.ts'
 import { diskStore } from '../lib/store.ts'
 import type { Settings } from '../lib/settings.ts'
-import type { Claim, FixWave, Implementation, ReviewWave } from '../lib/store.ts'
+import type { Claim, FixWave, Implementation, PrReport, ReviewWave } from '../lib/store.ts'
 
 function addDesign(repo: string, name: string, planned: boolean) {
   const dir = path.join(repo, 'factory', 'ready', name)
@@ -228,7 +228,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 const NO_RULES: RepoRules = { afterPush: null, qaRules: null }
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; catchUp?: 'behind' | 'diverged' | 'conflicts' | 'changed'; replyFails?: (id: string) => boolean; allowInitialError?: boolean; reReviewBelow?: number; rules?: RepoRules } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; catchUp?: 'behind' | 'diverged' | 'conflicts' | 'changed'; replyFails?: (id: string) => boolean; resolveFails?: (attempt: number) => boolean; allowInitialError?: boolean; reReviewBelow?: number; rules?: RepoRules } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -244,6 +244,8 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const github = [...(options.github ?? [{ approved: true }])]
   const reviewPrompts: string[] = []
   const replies: { id: string; body: string; resolved: boolean }[] = []
+  const resolves: string[] = []
+  const atResolve: PrReport[] = []
   const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, afterPushes: [] as string[] }
   const steps: string[] = []
   let head = 'abc'
@@ -320,10 +322,17 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       pushedHead = head
     },
     acknowledge: (item) => void steps.push(`eyes on ${item.id}`),
-    reply: (_number, item, body, resolved) => {
+    reply: (_number, item, body) => {
       if (options.replyFails?.(item.id)) throw new Error('GitHub is down')
       steps.push('reply')
-      replies.push({ id: item.id, body, resolved })
+      replies.push({ id: item.id, body, resolved: false })
+    },
+    // Records what a build stopped at this moment would leave on disk.
+    resolve: (thread) => {
+      const attempt = resolves.push(thread)
+      atResolve.push(structuredClone(world.store.prReport(world.repoId, 1)!))
+      if (options.resolveFails?.(attempt)) throw new Error('GitHub is down')
+      replies.findLast((reply) => reply.id === thread)!.resolved = true
     },
     requestReview: () => {
       steps.push('re-review')
@@ -343,7 +352,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     if (!options.allowInitialError) throw error
     report = world.store.prReport(world.repoId, 1)!
   }
-  return { repo, report, build, prompts, merges, events, world, reviews, fixPrompts, excessPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4, options.rules ?? NO_RULES) }
+  return { repo, report, build, prompts, merges, events, world, reviews, fixPrompts, excessPrompts, opened, audited: () => audits, reviewPrompts, replies, resolves, atResolve, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4, options.rules ?? NO_RULES) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -1026,6 +1035,30 @@ test('a review fix is replied to only after after-push succeeds on its new head'
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
   assert.deepEqual(did.afterPushes, ['publish 7', 'publish 7'])
   assert.deepEqual(steps.slice(-3), ['after push', 'reply', 're-review'])
+})
+
+test('a thread that fails to resolve after its reply posted is resolved on the next pass without replying again', async () => {
+  const { report, replies, resolves } = await buildPr({ resolveFails: (attempt) => attempt === 1, github: [{ items: [BOT_THREAD] }, { approved: true }] })
+  assert.equal(reviewState(report), 'merged')
+  assert.deepEqual([replies, resolves], [[{ id: 'T1', body: 'reply to R1', resolved: true }], ['T1', 'T1']])
+})
+
+test('a thread that keeps failing to resolve stops the build with the reason, and the next build resolves it without replying again', async () => {
+  let down = true
+  const { report, replies, resolves, world, build } = await buildPr({ resolveFails: () => down, github: [{ items: [BOT_THREAD] }, { approved: true }] })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.match(('review' in report && report.review?.problems.join('\n')) || '', /review thread T1 was posted, but resolving the thread failed 3 times \(GitHub is down\)/)
+  assert.equal(world.store.prReport(world.repoId, 1)?.held?.replies[0].posted, true)
+  down = false
+  assert.equal(reviewState(await build()), 'merged')
+  assert.deepEqual([replies, resolves.length], [[{ id: 'T1', body: 'reply to R1', resolved: true }], 4])
+})
+
+test('a build stopped between posting a reply and resolving its thread only resolves it next time', async () => {
+  const { replies, resolves, atResolve, world, build } = await buildPr({ github: [{ items: [BOT_THREAD] }, { approved: true }] })
+  world.store.savePrReport(world.repoId, atResolve[0])
+  assert.equal(reviewState(await build()), 'merged')
+  assert.deepEqual([replies, resolves], [[{ id: 'T1', body: 'reply to R1', resolved: true }], ['T1', 'T1']])
 })
 
 test('the after-push command runs in the worktree with the bot token and fails with its last output', { concurrency: false }, async () => {

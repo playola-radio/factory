@@ -18,7 +18,7 @@ reason; old reports (no `posted`) load.
 `fix failed` naming the thread, the stored held reply is `posted: true`, the next build resolves without posting;
 the report saved when the resolve began (a build stopped between the calls) → the next build resolves without
 posting.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Every push catches up with GitHub first
 **Goal**: no push in `implement.ts`/`review.ts` is a plain `workshop.push`; each goes through
