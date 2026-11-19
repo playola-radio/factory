@@ -149,7 +149,7 @@ works, but asks you how you will supply each screen as a PNG.
 
 Run `factory status <repo-path>` to see whether a design is ready to build, and `factory finalize <repo-path> <NNN>
 --author <claude|codex>` to have the other vendor review the plan and mark it finished. The skill does this for you
-at the end of the conversation. If `factory` is not on your PATH, run `./install.sh` again.
+at the end of the conversation. `./install.sh` links `factory` into `~/.local/bin`, which must be on your PATH; alternatively, run `~/.local/bin/factory` directly.
 
 ## Building
 

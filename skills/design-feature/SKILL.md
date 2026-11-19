@@ -20,7 +20,7 @@ No application code is written here. The folder is the truth: every decision mad
 
 `factory status <repo>` names anything wrong with a folder's shape or plan; run it whenever unsure. If `factory` is not on the PATH, run `./install.sh` from the factory repo.
 
-If the folder already exists and only lacks a finished plan, go to step 8.
+If the folder already exists and only lacks a finished plan, read `factory/design-rules.md` if the repo has one and follow it, then go to step 8.
 
 ## 1. Set up
 
