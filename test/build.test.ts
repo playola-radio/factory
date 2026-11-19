@@ -949,6 +949,20 @@ test('replies held when the after-push command fails are kept in the report and 
   assert.equal(world.store.prReport(world.repoId, 1)?.held, undefined)
 })
 
+test('a held re-review request is dropped when the score on GitHub has since reached the threshold', async () => {
+  const bot = { items: [BOT_THREAD], greptile: { score: 0 } }
+  const { did, replies, build } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    afterPush: (_worktree, run) => {
+      if (run === 2) throw new Error('publish failed')
+    },
+    github: [bot, bot, { items: [BOT_THREAD], greptile: { score: 5 } }, { state: 'closed' }],
+  })
+  assert.equal(reviewState(await build()), 'closed')
+  assert.deepEqual([replies.length, did.reReviews], [1, 0])
+})
+
 test('a build that stops partway through posting held replies leaves only the unposted ones for the next build', async () => {
   const other: ReviewItem = { ...BOT_THREAD, id: 'T4', where: 'App.swift:4' }
   const bots = { items: [BOT_THREAD, other], greptile: { score: 0 } }

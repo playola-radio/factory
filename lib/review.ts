@@ -59,7 +59,8 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     return labelled.map(({ label, item }) => ({ label, item, reply: wave.replies.find((candidate) => candidate.id === label) }))
   }
   // Posts held replies one at a time, saving after each, so a build that stops partway never posts one twice.
-  const postHeld = () => {
+  // A held re-review request is dropped once GitHub shows a score at or above the threshold.
+  const postHeld = (score: number | null | undefined) => {
     while (held) {
       const [next, ...rest] = held.replies
       if (next) {
@@ -67,7 +68,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
         if (next.item.kind === 'comment') review = { ...review, answered: [...review.answered, next.item.id] }
         held = { ...held, replies: rest }
       } else {
-        if (held.reReview) workshop.requestReview(number)
+        if (held.reReview && !(score != null && score >= reReviewBelow)) workshop.requestReview(number)
         held = undefined
       }
       save()
@@ -109,7 +110,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     let justPosted: Set<string> | undefined
     if (held) {
       justPosted = new Set(held.replies.map(({ item }) => item.id))
-      postHeld()
+      postHeld(github.greptile?.score)
       record('review round')
     }
     const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !justPosted?.has(item.id))
@@ -160,7 +161,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     // With an after-push command, a pushed fix's replies wait until the command has succeeded on it.
     if (afterPush && pushed) save()
     else {
-      postHeld()
+      postHeld(github.greptile?.score)
       record('review round')
     }
   }
