@@ -2,7 +2,7 @@
 
 Turns finished feature designs into reviewed pull requests.
 
-You design a feature with the `design-feature` skill, which writes a folder under `designs/ready/` in the target
+You design a feature with the `design-feature` skill, which writes a folder under `factory/ready/` in the target
 repo ending in an `ImplementationPlan.md`. The factory then builds that plan one PR at a time. Each PR is
 implemented by one AI agent in a fresh worktree. The other vendor's agent tries to break it and audits it for
 excess. The factory then opens the PR, answers the reviewers and merges once the owner approves.

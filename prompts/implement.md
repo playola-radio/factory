@@ -13,7 +13,7 @@ You are implementing one pull request of an approved design. Nobody is watching:
 5. Where the repo's rules call for UX evidence: a PR that delivers "Done when" items records a `functional` case (video) whose flow carries those items out from start to finish on staging, including the taps that save. `visual` (screenshots) is only for a restyle of a screen that already works. Make whatever staging data the flow needs to show a realistic screen. Name in your summary any item the recording does not show, and why.
 6. Commit everything. No `Co-Authored-By` or any other co-sign line in commit messages.
 
-**Not yours:** do not push, open a pull request, run a review gate, call Codex, or edit anything under `designs/`. The factory does what comes next.
+**Not yours:** do not push, open a pull request, run a review gate, call Codex, or edit anything under `factory/`. The factory does what comes next.
 
 If a step needs something you do not have (a login, a device, a secret), finish everything else, commit it, and list that step under `blockers`. If the plan cannot be built as written, stop and say exactly why under `blockers`.
 

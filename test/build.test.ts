@@ -16,7 +16,7 @@ import { diskStore } from '../lib/store.ts'
 import type { Claim, FixWave, Implementation, ReviewWave } from '../lib/store.ts'
 
 function addDesign(repo: string, name: string, planned: boolean) {
-  const dir = path.join(repo, 'designs', 'ready', name)
+  const dir = path.join(repo, 'factory', 'ready', name)
   fs.mkdirSync(path.join(dir, 'screenshots'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'screenshots', 'a--default.png'), 'png')
   fs.writeFileSync(path.join(dir, 'Design.md'), '![a](screenshots/a--default.png)\n\n## Done when\n\n- [ ] first outcome\n')
@@ -29,7 +29,7 @@ function addDesign(repo: string, name: string, planned: boolean) {
 
 function setup(designs: [string, boolean][], branches: string[] = []) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-build-'))
-  fs.mkdirSync(path.join(repo, 'designs', 'ready'), { recursive: true })
+  fs.mkdirSync(path.join(repo, 'factory', 'ready'), { recursive: true })
   for (const [name, planned] of designs) addDesign(repo, name, planned)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-'))
   const world: World = {
@@ -75,7 +75,7 @@ test('refuses when GitHub already has factory branches for the design', () => {
   assert.equal(world.store.claimFor('owner/app'), null)
 })
 
-test('reports nothing to build when designs/ready is empty', () => {
+test('reports nothing to build when factory/ready is empty', () => {
   const { repo, world } = setup([])
   assert.deepEqual(startOrResume(repo, world, 'develop'), { state: 'nothing to build' })
 })
@@ -296,7 +296,7 @@ test('a PR that comes through the gate clean is opened into the base branch unde
   const { report, opened } = await buildPr({ breaks: [[{ severity: 'P3', where: 'App.swift:1', problem: 'rare' }]], fix: { dispositions: [{ id: 'B1', action: 'declined', reason: 'not worth the complexity' }] } })
   assert.deepEqual('pullRequest' in report && report.pullRequest, { number: 7, url: 'https://github.com/owner/app/pull/7' })
   assert.deepEqual([opened[0].branch, opened[0].base, opened[0].title], ['factory/001-first/pr-1', 'feature/x', 'feature: do the thing'])
-  assert.match(opened[0].body, /built[\s\S]*designs\/ready\/001-first[\s\S]*0 findings fixed, 1 declined[\s\S]*B1 declined: not worth the complexity/)
+  assert.match(opened[0].body, /built[\s\S]*factory\/ready\/001-first[\s\S]*0 findings fixed, 1 declined[\s\S]*B1 declined: not worth the complexity/)
 })
 
 test('a PR the gate did not pass is not opened', async () => {
@@ -361,14 +361,14 @@ test('after three attempts a PR is left for the owner', async () => {
 test('an implementer that makes no commits or edits the design needs attention', async () => {
   const { report } = await buildPr({
     commits: [],
-    whileImplementing: (worktree) => fs.appendFileSync(path.join(worktree, 'designs', 'ready', '001-first', 'Design.md'), 'changed\n'),
+    whileImplementing: (worktree) => fs.appendFileSync(path.join(worktree, 'factory', 'ready', '001-first', 'Design.md'), 'changed\n'),
   })
   assert.deepEqual(report.state === 'needs attention' && report.problems, ['No commits were made.', 'The design folder or its plan was changed.'])
 })
 
 test('a base branch that does not hold the finished plan stops before any work', async () => {
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-empty-'))
-  fs.mkdirSync(path.join(empty, 'designs', 'ready'), { recursive: true })
+  fs.mkdirSync(path.join(empty, 'factory', 'ready'), { recursive: true })
   await assert.rejects(buildPr({ worktree: empty }), /does not hold the finished plan for 001-first/)
 })
 
@@ -574,9 +574,9 @@ test("the design's last PR moves the design to done before it is opened", async 
 
 test('a design is still found once it has been moved to done', async () => {
   const { repo } = setup([['001-first', true]])
-  fs.mkdirSync(path.join(repo, 'designs', 'done'))
-  fs.renameSync(path.join(repo, 'designs', 'ready', '001-first'), path.join(repo, 'designs', 'done', '001-first'))
-  assert.equal(readDesign(repo, '001').dir, path.join('designs', 'done', '001-first'))
+  fs.mkdirSync(path.join(repo, 'factory', 'done'))
+  fs.renameSync(path.join(repo, 'factory', 'ready', '001-first'), path.join(repo, 'factory', 'done', '001-first'))
+  assert.equal(readDesign(repo, '001').dir, path.join('factory', 'done', '001-first'))
 })
 
 test('finishing a design frees the repo and forgets its PRs, so the next design starts clean', async () => {
