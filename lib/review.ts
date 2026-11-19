@@ -63,11 +63,9 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     const github = workshop.pullRequestState(number)
     if (github.state !== 'open') return end(github.state)
     const { afterPush } = rules
-    if (afterPush) {
-      if (workshop.head(worktree) !== github.head) {
-        await workshop.wait()
-        continue
-      }
+    // Until the worktree matches GitHub and the after-push command has run on it, a pass may fix and push but posts nothing and cannot merge.
+    const synced = !afterPush || workshop.head(worktree) === github.head
+    if (afterPush && synced) {
       const changed = afterPush.whenChanged ? fingerprint(worktree, afterPush.whenChanged) : null
       if (afterPushStamp === undefined || (changed !== null && changed !== afterPushStamp)) {
         const command = afterPush.command.replaceAll('{pr}', String(number))
@@ -85,7 +83,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       continue
     }
     const unanswered = github.items.filter((item) => !review.answered.includes(item.id))
-    if (github.approved && github.checks === 'passed' && !github.conflicts) {
+    if (synced && github.approved && github.checks === 'passed' && !github.conflicts) {
       workshop.merge(number, github.head)
       const questions = unanswered.filter((item) => item.fromOwner)
       if (questions.length > 0) {
@@ -123,6 +121,10 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
 
     const pushed = workshop.head(worktree) !== github.head
     if (pushed) workshop.push(worktree, branch)
+    if (!synced) {
+      save()
+      continue
+    }
     for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
     if (pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow) workshop.requestReview(number)
     review = { ...review, answered: [...review.answered, ...items.filter((item) => item.kind === 'comment').map((item) => item.id)] }

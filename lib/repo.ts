@@ -14,8 +14,6 @@ export interface RepoRules {
   qaRules: string | null
 }
 
-export const NO_RULES: RepoRules = { afterPush: null, qaRules: null }
-
 const CONFIG_FILE = 'factory/config.json'
 const QA_RULES_FILE = 'factory/qa-rules.md'
 

@@ -12,7 +12,6 @@ import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildDesign, buildNextPr } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
-import { NO_RULES } from '../lib/repo.ts'
 import type { RepoRules } from '../lib/repo.ts'
 import { diskStore } from '../lib/store.ts'
 import type { Settings } from '../lib/settings.ts'
@@ -225,6 +224,7 @@ test('uninstall removes the factory command linked into this repository', () => 
   assert.equal(fs.existsSync(command), false)
 })
 
+const NO_RULES: RepoRules = { afterPush: null, qaRules: null }
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
 async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number) => void; reReviewBelow?: number; rules?: RepoRules } = {}) {
@@ -246,6 +246,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, afterPushes: [] as string[] }
   const steps: string[] = []
   let head = 'abc'
+  let pushedHead = head
   const workshop: Workshop = {
     prepareWorktree: () => options.worktree ?? repo,
     mergeBase: (_worktree, base) => {
@@ -281,6 +282,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     openPullRequest: (_worktree, branch, base, title, body) => {
       steps.push('opened')
       opened.push({ branch, base, title, body })
+      pushedHead = head
       return { number: 7, url: 'https://github.com/owner/app/pull/7' }
     },
     afterPush: (worktree, command) => {
@@ -288,7 +290,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       const run = did.afterPushes.push(command)
       options.afterPush?.(worktree, run)
     },
-    pullRequestState: () => ({ state: 'open', head, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptile: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
+    pullRequestState: () => ({ state: 'open', head: pushedHead, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptile: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
     answerReview: async (worktree, prompt) => {
       reviewPrompts.push(prompt)
       options.whileAnswering?.(worktree)
@@ -297,7 +299,10 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       const ids = [...prompt.matchAll(/\*\*(R\d+)\*\*/g)].map((match) => match[1])
       return { summary: 'answered', replies: ids.map((id) => ({ id, action, reply: `reply to ${id}` })), checks: [], blockers: [], ...options.answer }
     },
-    push: () => void (did.pushed += 1),
+    push: () => {
+      did.pushed += 1
+      pushedHead = head
+    },
     acknowledge: (item) => void steps.push(`eyes on ${item.id}`),
     reply: (_number, item, body, resolved) => void replies.push({ id: item.id, body, resolved }),
     requestReview: () => void (did.reReviews += 1),
@@ -746,12 +751,6 @@ test('without whenChanged the command never runs again, even after a fix is push
   assert.deepEqual([did.pushed, did.afterPushes.length], [1, 1])
 })
 
-test('without whenChanged a stored empty stamp counts as having run', async () => {
-  const { did, build } = await buildPr({ rules: PUBLISH, github: [{ items: [BOT_THREAD] }, { approved: true }], answer: { checks: [{ command: 'make lint', passed: false }] } })
-  await build()
-  assert.deepEqual([did.afterPushes.length, did.merged], [1, 1])
-})
-
 test('with whenChanged the command runs again only when a matched file changed', async () => {
   let round = 0
   const { did } = await buildPr({
@@ -808,8 +807,18 @@ test('a failed after-push command needs attention and blocks replies, re-review 
 })
 
 test("while the worktree's head differs from GitHub's, nothing is run, posted or merged", async () => {
-  const { did, replies, reviewPrompts } = await buildPr({ rules: PUBLISH, github: [{ approved: true, head: 'someone-else', items: [OWNER_COMMENT] }, { state: 'closed' }] })
-  assert.deepEqual([did.afterPushes.length, did.merged, replies.length, reviewPrompts.length, did.waits], [0, 0, 0, 0, 1])
+  const { did, replies } = await buildPr({ rules: PUBLISH, github: [{ approved: true, head: 'someone-else', items: [OWNER_COMMENT], greptile: { score: 0 } }, { state: 'closed' }] })
+  assert.deepEqual([did.afterPushes.length, did.merged, replies.length, did.reReviews], [0, 0, 0, 0])
+})
+
+test('a review fix left unpushed by a failed check is retried on the next build and posted only once GitHub has it; the stored empty stamp keeps the command from running again', async () => {
+  const answer = { checks: [{ command: 'make lint', passed: false }] }
+  const pending = { items: [BOT_THREAD], greptile: { score: 0 } }
+  const { did, replies, reviewPrompts, build } = await buildPr({ rules: PUBLISH, answer, github: [pending, pending, pending, { approved: true }] })
+  assert.deepEqual([did.pushed, replies.length], [0, 0])
+  answer.checks = []
+  assert.equal(reviewState(await build()), 'merged')
+  assert.deepEqual([reviewPrompts.length, did.pushed, replies.length, did.reReviews, did.afterPushes.length], [3, 2, 1, 1, 1])
 })
 
 test('the after-push command runs in the worktree with the bot token and fails with its last output', { concurrency: false }, () => {
