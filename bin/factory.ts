@@ -10,7 +10,7 @@ import readline from 'node:readline/promises'
 import { NO_DELEGATION, OTHER_VENDOR, runAgent } from '../lib/agents.ts'
 import { readDesign } from '../lib/design.ts'
 import { finalizePlan } from '../lib/finalize.ts'
-import { abandon, finish, realWorld, resolveBase, startOrResume } from '../lib/build.ts'
+import { abandon, finish, nextDesign, realWorld, resolveBase } from '../lib/build.ts'
 import { runInit } from '../lib/init.ts'
 import { loadSettings, loadSettingsIfPresent } from '../lib/settings.ts'
 import { buildDesign } from '../lib/implement.ts'
@@ -109,7 +109,7 @@ async function main() {
     fs.writeFileSync(lock, String(process.pid))
     process.on('exit', () => fs.rmSync(lock, { force: true }))
     for (;;) {
-      const report = startOrResume(baseView(repo, buildDir, base), world, base)
+      const { rules, report } = nextDesign(baseView(repo, buildDir, base), world, base)
       if (report.state !== 'started' && report.state !== 'already in progress') {
         console.log(JSON.stringify(report, null, 2))
         if (report.state !== 'nothing to build') process.exitCode = 1

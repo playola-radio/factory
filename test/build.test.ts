@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { abandon, finish, repoIdFromRemote, startOrResume } from '../lib/build.ts'
+import { abandon, finish, nextDesign, repoIdFromRemote, startOrResume } from '../lib/build.ts'
 import type { World } from '../lib/build.ts'
 import { readDesign } from '../lib/design.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
@@ -79,6 +79,28 @@ test('refuses when GitHub already has factory branches for the design', () => {
 test('reports nothing to build when factory/ready is empty', () => {
   const { repo, world } = setup([])
   assert.deepEqual(startOrResume(repo, world, 'develop'), { state: 'nothing to build' })
+})
+
+test("the repo's rules are read again for each design, so a change merged into the base reaches the next one", () => {
+  const { repo, world } = setup([['001-first', true], ['002-second', true]])
+  fs.mkdirSync(path.join(repo, 'factory'), { recursive: true })
+  fs.writeFileSync(path.join(repo, 'factory', 'qa-rules.md'), 'old rules')
+  const first = nextDesign(repo, world, 'develop')
+  assert.deepEqual([first.report.state, first.rules.qaRules], ['started', 'old rules'])
+  fs.rmSync(path.join(repo, 'factory', 'ready', '001-first'), { recursive: true })
+  finish(world)
+  fs.writeFileSync(path.join(repo, 'factory', 'qa-rules.md'), 'new rules')
+  fs.writeFileSync(path.join(repo, 'factory', 'config.json'), '{"afterPush":{"command":"echo {pr}"}}')
+  const second = nextDesign(repo, world, 'develop')
+  assert.equal(second.report.state === 'started' && second.report.design, '002-second')
+  assert.deepEqual(second.rules, { afterPush: { command: 'echo {pr}' }, qaRules: 'new rules' })
+})
+
+test('a bad repo config stops the build before a design is claimed', () => {
+  const { repo, world } = setup([['001-first', true]])
+  fs.writeFileSync(path.join(repo, 'factory', 'config.json'), '{"afterpush":{}}')
+  assert.throws(() => nextDesign(repo, world, 'develop'), /factory\/config\.json on develop: afterpush is not a field/)
+  assert.equal(world.store.claimFor('owner/app'), null)
 })
 
 test('abandoning frees the repo for the next build', () => {

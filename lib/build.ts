@@ -3,6 +3,8 @@ import { isDeepStrictEqual } from 'node:util'
 
 import { readDesign } from './design.ts'
 import { designStatuses, readApprovedPlan } from './readiness.ts'
+import { readRepoRules } from './repo.ts'
+import type { RepoRules } from './repo.ts'
 import type { Claim, Store } from './store.ts'
 import type { PlannedPr } from './types.ts'
 
@@ -48,6 +50,13 @@ export function startOrResume(repo: string, world: World, base: string): BuildRe
   world.store.claim(claim)
   world.store.record({ at: claim.startedAt, repo: claim.repo, design: claim.design, type: 'design claimed' })
   return { state: 'started', design: next.design, claim }
+}
+
+// Called on every refresh of the base checkout, so a rule merged into the base during a long build reaches the next design.
+// The rules are checked before a design is claimed.
+export function nextDesign(view: string, world: World, base: string): { rules: RepoRules; report: BuildReport } {
+  const rules = readRepoRules(view, base)
+  return { rules, report: startOrResume(view, world, base) }
 }
 
 export function abandon(world: World): { state: 'abandoned'; design: string; deleteBeforeBuildingAgain: string[] } | { state: 'nothing in progress' } {
