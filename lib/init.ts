@@ -31,7 +31,7 @@ function existingSettings(home: string): Settings | null {
   return checked.settings
 }
 
-export async function runInit(home: string, deps: InitDeps): Promise<Settings> {
+export async function runInit(home: string, deps: InitDeps): Promise<void> {
   const file = settingsFile(home)
   const before = existingSettings(home)
   deps.say(before ? `Updating ${file}. Press Enter to keep what is shown in brackets.` : `Writing ${file}.`)
@@ -85,5 +85,4 @@ export async function runInit(home: string, deps: InitDeps): Promise<Settings> {
   fs.mkdirSync(home, { recursive: true })
   fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`)
   deps.say(`Wrote ${file}.`)
-  return checked.settings
 }

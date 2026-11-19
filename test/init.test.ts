@@ -17,14 +17,13 @@ const written = (home: string) => JSON.parse(fs.readFileSync(path.join(home, 'se
 // Answers questions in order; '' accepts the default. `gh` knows who is signed in and which bots have tokens.
 function script(answers: string[], options: { tokenFails?: boolean } = {}) {
   const asked: string[] = []
-  const said: string[] = []
   const calls: string[][] = []
   const deps: InitDeps = {
     ask: async (question) => {
       asked.push(question)
       return answers.shift() ?? ''
     },
-    say: (line) => void said.push(line),
+    say: () => undefined,
     gh: (args) => {
       calls.push(args)
       if (args[0] === 'api' && args[1] === 'user') return 'owner-login'
@@ -36,7 +35,7 @@ function script(answers: string[], options: { tokenFails?: boolean } = {}) {
       throw new Error(`unexpected gh ${args.join(' ')}`)
     },
   }
-  return { deps, asked, said, calls }
+  return { deps, asked, calls }
 }
 
 test('scripted answers write the expected file', async () => {

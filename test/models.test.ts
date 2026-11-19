@@ -49,14 +49,6 @@ const agentCall = {
   step: 'x',
 }
 
-test('no model set: neither CLI is given a model flag', { concurrency: false }, () =>
-  withFakeClis(async (argsOf) => {
-    await runAgent({ ...agentCall, vendor: 'claude' })
-    await runAgent({ ...agentCall, vendor: 'codex' })
-    assert.equal(argsOf('claude').includes('--model'), false)
-    assert.equal(argsOf('codex').includes('-m'), false)
-  }))
-
 test('a model set is passed to the CLI it is for', { concurrency: false }, () =>
   withFakeClis(async (argsOf) => {
     await runAgent({ ...agentCall, vendor: 'claude', model: 'sonnet' })

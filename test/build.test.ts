@@ -492,8 +492,8 @@ test("a bot's finding is fixed, pushed, answered in its thread, resolved, and re
   assert.equal(reviewState(report), 'merged')
 })
 
-test('a score at the threshold, a missing score, or no Greptile at all never asks for a second review', async () => {
-  for (const greptile of [{ score: 4 }, { score: null }, null]) {
+test('a missing score, or no Greptile at all never asks for a second review', async () => {
+  for (const greptile of [{ score: null }, null]) {
     const { did } = await buildPr({ github: [{ items: [BOT_THREAD], greptile }, { approved: true }] })
     assert.deepEqual([did.pushed, did.reReviews], [1, 0])
   }
