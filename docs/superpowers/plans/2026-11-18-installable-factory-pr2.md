@@ -10,7 +10,7 @@ and "paid review" wording, the full README walkthrough, `LICENSE`, and the plan 
 **Goal**: `factory/ready` and `factory/done` everywhere `designs/` was: `lib/design.ts`, `lib/readiness.ts`, `markDesignBuilt` in `lib/workshop.ts`, the PR body in `lib/implement.ts`, usage text and the finalize error in `bin/factory.ts`, "anything under `factory/`" in the four writer prompts, and the paths (only) in `skills/design-feature/SKILL.md`.
 **Success Criteria**: `grep -rn "designs/" lib bin prompts skills` finds nothing; designs are found in `factory/ready` and `factory/done`; a design whose plan was finished in `designs/ready` and then moved to `factory/ready` is still buildable.
 **Tests**: existing design, readiness and build tests on `factory/`; new: a plan sealed in `designs/ready` stays finished after the folder moves to `factory/ready`.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: `checkRepoConfig` and reading the repo's rules from the base
 **Goal**: `lib/repo.ts` with pure `checkRepoConfig(json)` → `{ config } | { problems }` and `readRepoRules(view, base)` → `{ afterPush, qaRules }`; `nextDesign(view, world, base)` in `lib/build.ts` reads the rules before `startOrResume`, and `bin/factory.ts` calls it on every refresh of the base.

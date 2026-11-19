@@ -1,6 +1,6 @@
 ---
 name: design-feature
-description: Use when starting a new feature or changing an existing one, BEFORE any implementation code, and when a design folder needs its implementation plan — "design X", "let's design it first", "start a design PR", "plan design 001", "finish the design". Produces one numbered folder in designs/ready/ (screens, contract, model changes, implementation plan) shipped as one design PR, which is the only thing the factory will build from.
+description: Use when starting a new feature or changing an existing one, BEFORE any implementation code, and when a design folder needs its implementation plan — "design X", "let's design it first", "start a design PR", "plan design 001", "finish the design". Produces one numbered folder in factory/ready/ (screens, contract, model changes, implementation plan) shipped as one design PR, which is the only thing the factory will build from.
 ---
 
 # Design Feature
@@ -8,7 +8,7 @@ description: Use when starting a new feature or changing an existing one, BEFORE
 One conversation with the owner that ends in one folder the factory can build without asking anything:
 
 ```text
-designs/ready/<NNN>-<kebab-name>/
+factory/ready/<NNN>-<kebab-name>/
   Design.md               always
   screenshots/            always; <screen>--<state>.png
   ApiContract.md          only if the design calls any endpoint
@@ -31,7 +31,7 @@ If the folder already exists and only lacks a finished plan, go to step 8.
 
 ## 2. Scope one slice
 
-Push back until you agree what is built and what is not. Then cut it: one design is one thin path a user can complete end to end (create → act → see the result), not a layer. The first slice is this design; each later slice is its own numbered folder later. `<NNN>` is the next free number across `designs/ready/` and `designs/done/`; numbers are the build order.
+Push back until you agree what is built and what is not. Then cut it: one design is one thin path a user can complete end to end (create → act → see the result), not a layer. The first slice is this design; each later slice is its own numbered folder later. `<NNN>` is the next free number across `factory/ready/` and `factory/done/`; numbers are the build order.
 
 Record in `Design.md`: who uses it, the intent in two sentences, what is out of scope, and for every list the realistic upper size (hundreds of rows, not three).
 

@@ -118,7 +118,7 @@ function pullRequestBody(report: PrReport, design: string, number: number, total
   return [
     '# What & why',
     report.implementation.summary,
-    `Built by the factory from \`designs/ready/${design}/\` (PR ${number} of ${total} in its plan).`,
+    `Built by the factory from \`factory/ready/${design}/\` (PR ${number} of ${total} in its plan).`,
     '## Review gate',
     `Clean after ${rounds.length} round${rounds.length === 1 ? '' : 's'}: ${settled.length - declined.length} findings fixed, ${declined.length} declined.`,
     ...declined.map((disposition) => `- ${disposition.id} declined: ${disposition.reason}`),

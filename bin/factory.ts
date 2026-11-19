@@ -26,13 +26,13 @@ const USAGE = `Usage:
                                   check ImplementationPlan.md, have the other vendor review it, and mark it finished
                                   (no number: the first design without a finished plan; --author is who wrote the plan)
   factory init                    set up this computer: your GitHub login, the bot account, Greptile and models (writes settings.json)
-  factory status <repo-path>      list designs/ready and say which have a finished plan and can be built
+  factory status <repo-path>      list factory/ready and say which have a finished plan and can be built
   factory build <repo-path> [--base <branch>] [--model <id>] [--one-design]
                                   start the next design on the base branch as GitHub has it (or continue the one in progress) and implement its next PR
                                   in a fresh worktree, or finish one that needs attention (three attempts at most), then put it
                                   through the review gate (Codex tries to break it and audits it for excess, the implementer
                                   fixes, three rounds at most), then push it and open its PR as the bot account and stay with it: fix or answer what reviewers say, merge it once
-                                  the owner approves, and go on to the next PR and then the next design (the last PR moves its design to designs/done;
+                                  the owner approves, and go on to the next PR and then the next design (the last PR moves its design to factory/done;
                                   --one-design stops once the current design is finished); --base is the branch its PRs go into (default: the repo's default branch)
   factory abandon <repo-path>     give up the design in progress so the next build can start
 
@@ -53,7 +53,7 @@ function isAlive(pid: number): boolean {
 async function finalize(repoArg: string, numberArg: string | undefined, options: Record<string, string | undefined>, models: Settings['models']) {
   const repo = path.resolve(repoArg)
   const number = numberArg ?? designStatuses(repo).find((status) => !status.buildable)?.design.slice(0, 3)
-  if (!number) throw new Error('Every design in designs/ready already has a finished plan.')
+  if (!number) throw new Error('Every design in factory/ready already has a finished plan.')
   const design = readDesign(repo, number)
   const author = (options.author || 'claude') as Vendor
   if (!(author in OTHER_VENDOR)) throw new Error(`--author must be claude or codex, not ${author}`)
