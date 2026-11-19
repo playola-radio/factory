@@ -761,11 +761,6 @@ test('the after-push command runs once when the PR opens, with the PR number, be
   assert.equal(storedStamp(world), '')
 })
 
-test('with no after-push command nothing is run', async () => {
-  const { did } = await buildPr()
-  assert.deepEqual(did.afterPushes, [])
-})
-
 test('without whenChanged the command never runs again, even after a fix is pushed', async () => {
   const { did } = await buildPr({ rules: PUBLISH, github: [{ items: [OWNER_THREAD] }, { approved: true }] })
   assert.deepEqual([did.pushed, did.afterPushes.length], [1, 1])

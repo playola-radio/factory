@@ -50,4 +50,4 @@ after-push command nothing is run`, which is a duplicate: `test/repo.test.ts` co
 after-push", and `a bot's finding is fixed, pushed, answered…` already asserts `afterPushes: []` with no rules.
 **Success Criteria**: `node --test` passes.
 **Tests**: none new.
-**Status**: Not Started
+**Status**: Complete
