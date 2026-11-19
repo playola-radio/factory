@@ -228,7 +228,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 const NO_RULES: RepoRules = { afterPush: null, qaRules: null }
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; catchUp?: 'behind' | 'diverged' | 'conflicts'; replyFails?: (id: string) => boolean; reReviewBelow?: number; rules?: RepoRules } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; catchUp?: 'behind' | 'diverged' | 'conflicts' | 'changed'; replyFails?: (id: string) => boolean; allowInitialError?: boolean; reReviewBelow?: number; rules?: RepoRules } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -296,6 +296,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       steps.push('catch up')
       const how = options.catchUp ?? 'ahead'
       if (how === 'conflicts') return 'conflicts'
+      if (how === 'changed') return 'changed'
       if (how === 'behind') {
         head = theirs
         return 'fast-forwarded'
@@ -335,7 +336,14 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     wait: async () => void (did.waits += 1),
   }
   const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4, options.rules ?? NO_RULES)
-  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, excessPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4, options.rules ?? NO_RULES) }
+  let report: Awaited<ReturnType<typeof build>>
+  try {
+    report = await build()
+  } catch (error) {
+    if (!options.allowInitialError) throw error
+    report = world.store.prReport(world.repoId, 1)!
+  }
+  return { repo, report, build, prompts, merges, events, world, reviews, fixPrompts, excessPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4, options.rules ?? NO_RULES) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -874,6 +882,12 @@ test('a branch that changed on both sides and conflicts needs attention, with no
   assert.equal(events().at(-1), 'pr needs attention')
 })
 
+test('a catch-up fetch that sees a newer GitHub head waits for a fresh read', async () => {
+  const { did, steps } = await buildPr({ rules: PUBLISH, catchUp: 'changed', github: [{ head: 'owner-push' }, { approved: true }] })
+  assert.deepEqual(steps.slice(2), ['catch up', 'after push'])
+  assert.deepEqual([did.waits, did.afterPushes.length, did.mergedHeads], [1, 1, ['abc']])
+})
+
 test('with no after-push command the worktree is not caught up with GitHub', async () => {
   const { did, steps } = await buildPr({ github: [{ head: 'owner-push', approved: true }] })
   assert.ok(!steps.includes('catch up'))
@@ -941,7 +955,7 @@ test('replies held when the after-push command fails are kept in the report and 
     },
     github: [bot, bot, bot, { state: 'closed' }],
   })
-  assert.deepEqual(world.store.prReport(world.repoId, 1)?.held, { replies: [{ item: { id: 'T1', kind: 'thread', text: BOT_THREAD.text }, body: 'reply to R1', resolve: true }], reReview: true })
+  assert.deepEqual(world.store.prReport(world.repoId, 1)?.held, { replies: [{ item: { id: 'T1', kind: 'thread', latest: BOT_THREAD.latest, fromOwner: false, text: BOT_THREAD.text }, body: 'reply to R1', resolve: true }], reReview: true })
   assert.equal(replies.length, 0)
   assert.equal(reviewState(await build()), 'closed')
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
@@ -982,6 +996,27 @@ test('a build that stops partway through posting held replies leaves only the un
   assert.deepEqual([replies.map(({ id }) => id), did.reReviews], [['T1', 'T4'], 1])
 })
 
+test('a failed first immediate reply keeps the held queue for the next build', async () => {
+  const { world, build } = await buildPr({ github: [{ items: [BOT_THREAD] }], replyFails: () => true, allowInitialError: true })
+  await assert.rejects(build(), /GitHub is down/)
+  assert.deepEqual(world.store.prReport(world.repoId, 1)?.held, { replies: [{ item: { id: 'T1', kind: 'thread', latest: BOT_THREAD.latest, fromOwner: false, text: BOT_THREAD.text }, body: 'reply to R1', resolve: true }], reReview: false })
+})
+
+test('a held reply does not resolve or hide a thread changed by the owner', async () => {
+  const ownerUpdate: ReviewItem = { ...BOT_THREAD, latest: 'owner-comment', fromOwner: true, text: 'owner-login: please also cover the new case' }
+  const { replies, reviewPrompts, build } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    afterPush: (_worktree, run) => {
+      if (run === 2) throw new Error('publish failed')
+    },
+    github: [{ items: [BOT_THREAD] }, { items: [ownerUpdate] }, { items: [ownerUpdate] }, { state: 'closed' }],
+  })
+  assert.equal(reviewState(await build()), 'closed')
+  assert.deepEqual(replies[0], { id: 'T1', body: 'reply to R1', resolved: false })
+  assert.equal(reviewPrompts.length, 2)
+})
+
 test('a review fix is replied to only after after-push succeeds on its new head', async () => {
   const { did, replies, steps } = await buildPr({
     rules: PUBLISH_CHANGED,
@@ -1018,6 +1053,7 @@ const eventually = async (condition: () => boolean) => {
   return condition()
 }
 const BACKGROUND_CHILD = 'sleep 300 & echo $! > child.pid; wait'
+const TERM_IGNORING_BACKGROUND_CHILD = "trap '' TERM; sleep 300 & echo $! > child.pid; wait"
 const childPid = (worktree: string) => Number(fs.readFileSync(path.join(worktree, 'child.pid'), 'utf8'))
 
 test('an after-push command that runs past its time limit is stopped along with every process it started', async () => {
@@ -1030,6 +1066,18 @@ test('stopping the build with Ctrl-C stops the after-push command and every proc
   const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-after-push-'))
   const workshopFile = path.resolve(import.meta.dirname, '..', 'lib', 'workshop.ts')
   const script = `import { runAfterPush } from ${JSON.stringify(workshopFile)}; await runAfterPush(process.env.WORKTREE, ${JSON.stringify(BACKGROUND_CHILD)}, process.env, 60000)`
+  const build = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: 'ignore', env: { ...process.env, WORKTREE: worktree } })
+  assert.equal(await eventually(() => fs.existsSync(path.join(worktree, 'child.pid')) && childPid(worktree) > 0), true)
+  build.kill('SIGINT')
+  const [, signal] = await once(build, 'exit')
+  assert.equal(signal, 'SIGINT')
+  assert.equal(await eventually(() => !running(childPid(worktree))), true)
+})
+
+test('stopping the build with Ctrl-C force-stops a descendant that ignores SIGTERM', async () => {
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-after-push-'))
+  const workshopFile = path.resolve(import.meta.dirname, '..', 'lib', 'workshop.ts')
+  const script = `import { runAfterPush } from ${JSON.stringify(workshopFile)}; await runAfterPush(process.env.WORKTREE, ${JSON.stringify(TERM_IGNORING_BACKGROUND_CHILD)}, process.env, 60000)`
   const build = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: 'ignore', env: { ...process.env, WORKTREE: worktree } })
   assert.equal(await eventually(() => fs.existsSync(path.join(worktree, 'child.pid')) && childPid(worktree) > 0), true)
   build.kill('SIGINT')

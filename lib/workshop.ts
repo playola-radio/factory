@@ -63,7 +63,7 @@ export interface Workshop {
   answerReview(worktree: string, prompt: string, step: string): Promise<ReviewWave>
   push(worktree: string, branch: string): void
   // Brings the worktree and the PR branch on GitHub to the same commit, never rewriting GitHub's: fast-forwards to it, pushes local commits on top of it, or merges the two and pushes. A conflicting merge is undone.
-  catchUp(worktree: string, branch: string, theirs: string): 'fast-forwarded' | 'pushed' | 'conflicts'
+  catchUp(worktree: string, branch: string, theirs: string): 'fast-forwarded' | 'pushed' | 'conflicts' | 'changed'
   // Marks a comment as seen with an eyes reaction.
   acknowledge(item: ReviewItem): void
   reply(number: number, item: Pick<ReviewItem, 'id' | 'kind' | 'text'>, body: string, resolve: boolean): void
@@ -163,18 +163,6 @@ export function runAfterPush(cwd: string, command: string, env: NodeJS.ProcessEn
         // the whole group has already exited
       }
     }
-    // Its own group no longer gets the terminal's Ctrl-C, so stopping the build stops the group (SIGTERM, as background jobs ignore SIGINT), then stops the build as the signal would have.
-    const interrupted = (signal: NodeJS.Signals) => {
-      signalGroup('SIGTERM')
-      stopListening()
-      process.kill(process.pid, signal)
-    }
-    const stopListening = () => {
-      process.off('SIGINT', interrupted)
-      process.off('SIGTERM', interrupted)
-    }
-    process.on('SIGINT', interrupted)
-    process.on('SIGTERM', interrupted)
     let stopped: string | undefined
     const stop = (reason: string) => {
       if (stopped) return
@@ -182,6 +170,20 @@ export function runAfterPush(cwd: string, command: string, env: NodeJS.ProcessEn
       signalGroup('SIGTERM')
       setTimeout(() => signalGroup('SIGKILL'), STOP_GRACE_MS)
     }
+    let interruptedBy: NodeJS.Signals | undefined
+    // Its own group no longer gets the terminal's Ctrl-C, so stopping the build stops the group (SIGTERM, as background jobs ignore SIGINT), then stops the build as the signal would have.
+    const interrupted = (signal: NodeJS.Signals) => {
+      if (interruptedBy) return
+      interruptedBy = signal
+      stop(`it was stopped by ${signal}`)
+      stopListening()
+    }
+    const stopListening = () => {
+      process.off('SIGINT', interrupted)
+      process.off('SIGTERM', interrupted)
+    }
+    process.on('SIGINT', interrupted)
+    process.on('SIGTERM', interrupted)
     const timer = setTimeout(() => stop(`it ran past ${timeoutMs / 60_000} minutes and was stopped`), timeoutMs)
     const chunks: Buffer[] = []
     let size = 0
@@ -200,6 +202,7 @@ export function runAfterPush(cwd: string, command: string, env: NodeJS.ProcessEn
     child.on('close', (code, signal) => {
       clearTimeout(timer)
       stopListening()
+      if (interruptedBy) return process.kill(process.pid, interruptedBy)
       if (code === 0 && !stopped) return resolve()
       const output = Buffer.concat(chunks).toString('utf8').trim().split('\n').slice(-20).join('\n')
       reject(new Error(`${stopped ?? (signal ? `it was stopped by ${signal}` : `exit ${code}`)}${output ? `\n${output}` : ''}`))
@@ -270,6 +273,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     },
     catchUp(worktree, branch, theirs) {
       git(worktree, 'fetch', 'origin', branch)
+      if (git(worktree, 'rev-parse', `origin/${branch}`) !== theirs) return 'changed'
       const isAncestor = (older: string, newer: string) => spawnSync('git', ['-C', worktree, 'merge-base', '--is-ancestor', older, newer]).status === 0
       if (isAncestor('HEAD', theirs)) {
         git(worktree, 'merge', '--ff-only', theirs)
