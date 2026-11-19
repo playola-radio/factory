@@ -134,7 +134,7 @@ async function main() {
       await runInit(HOME, {
         ask: (question) => prompts.question(question),
         say: (line) => console.log(line),
-        gh: (args) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(),
+        gh: (args, env) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...env } }).trim(),
       })
     } finally {
       prompts.close()

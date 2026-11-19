@@ -8,7 +8,7 @@ export interface InitDeps {
   ask(question: string): Promise<string>
   say(line: string): void
   // Runs gh and returns its trimmed output; throws when gh fails.
-  gh(args: string[]): string
+  gh(args: string[], env?: NodeJS.ProcessEnv): string
 }
 
 const shown = (fallback: string | undefined) => (fallback ? ` [${fallback}]` : '')
@@ -48,12 +48,19 @@ export async function runInit(home: string, deps: InitDeps): Promise<void> {
   if (login.toLowerCase() === owner.toLowerCase()) {
     throw new Error('The bot account must be a different account from yours: GitHub does not let anyone approve their own PR. Nothing was written.')
   }
+  let token: string
   try {
-    deps.gh(['auth', 'token', '--user', login])
+    token = deps.gh(['auth', 'token', '--user', login])
   } catch {
     throw new Error(
       `gh is not signed in as ${login}. Sign it in with:\n  gh auth login   (sign in as ${login})\n  gh auth switch  (go back to your own account)\nthen run "factory init" again. Nothing was written.`,
     )
+  }
+  try {
+    const authenticated = deps.gh(['api', 'user', '-q', '.login'], { GH_TOKEN: token })
+    if (authenticated.toLowerCase() !== login.toLowerCase()) throw new Error('wrong account')
+  } catch {
+    throw new Error(`The saved token does not authenticate as ${login}. Sign in again as ${login} with gh auth login, then run "factory init" again. Nothing was written.`)
   }
   const name = await askWithDefault(deps, 'Name for the bot\'s commits', before?.bot.login === login ? before.bot.name : login)
   let id: string

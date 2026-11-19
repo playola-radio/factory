@@ -125,6 +125,7 @@ function workshopWithGitHubResponse(response: object, settings: Settings = SETTI
   const gh = path.join(bin, 'gh')
   fs.writeFileSync(gh, `#!/usr/bin/env node
 if (process.argv[2] === 'auth') process.stdout.write('token')
+else if (process.argv[2] === 'api' && process.argv[3] === 'user') process.stdout.write('bot-login')
 else process.stdout.write(process.env.FACTORY_GH_RESPONSE)
 `)
   fs.chmodSync(gh, 0o755)

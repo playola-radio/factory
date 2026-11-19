@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { defaultBranch } from '../lib/workshop.ts'
+import { botToken, defaultBranch } from '../lib/workshop.ts'
 
 const FACTORY = path.join(import.meta.dirname, '..', 'bin', 'factory.ts')
 
@@ -65,13 +65,19 @@ function withFakeGh(script: string, run: () => void) {
 }
 
 test("the default base is GitHub's default branch for the repo", { concurrency: false }, () => {
-  withFakeGh('if [ "$1" = auth ]; then echo token; else echo \'{"defaultBranchRef":{"name":"develop"}}\'; fi', () => {
+  withFakeGh('if [ "$1" = auth ]; then echo token; elif [ "$1" = api ]; then echo bot-login; else echo \'{"defaultBranchRef":{"name":"develop"}}\'; fi', () => {
     assert.equal(defaultBranch('owner/app', 'bot-login'), 'develop')
   })
 })
 
 test('when GitHub cannot say, the error names the repo and suggests --base', { concurrency: false }, () => {
-  withFakeGh('if [ "$1" = auth ]; then echo token; else exit 1; fi', () => {
+  withFakeGh('if [ "$1" = auth ]; then echo token; elif [ "$1" = api ]; then echo bot-login; else exit 1; fi', () => {
     assert.throws(() => defaultBranch('owner/app', 'bot-login'), /owner\/app[\s\S]*--base/)
+  })
+})
+
+test('the bot token must authenticate as the configured bot', { concurrency: false }, () => {
+  withFakeGh('if [ "$1" = auth ]; then echo token; else echo someone-else; fi', () => {
+    assert.throws(() => botToken('bot-login'), /saved token does not authenticate as bot-login/)
   })
 })

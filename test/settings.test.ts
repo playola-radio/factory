@@ -14,6 +14,15 @@ test('a minimal file is valid and has no Greptile and no models', () => {
   assert.deepEqual(checkSettings(MINIMAL), { settings: { owner: 'owner-login', bot: BOT, greptile: null, models: {} } })
 })
 
+for (const field of ['owner', 'bot.login', 'bot.name', 'bot.email']) {
+  test(`${field} cannot have surrounding whitespace`, () => {
+    const json: any = structuredClone(MINIMAL)
+    if (field.startsWith('bot.')) json.bot[field.slice(4)] = ` ${json.bot[field.slice(4)]} `
+    else json[field] = ` ${json[field]} `
+    assert.match(problemsOf(json).join('\n'), new RegExp(`${field.replace('.', '\\.')} must not have surrounding whitespace`))
+  })
+}
+
 test('a full file is valid', () => {
   const full = { ...MINIMAL, greptile: { reReviewBelow: 3 }, models: { claude: 'opus', codex: 'gpt-6-astra' } }
   assert.deepEqual(checkSettings(full), { settings: { owner: 'owner-login', bot: BOT, greptile: { reReviewBelow: 3 }, models: { claude: 'opus', codex: 'gpt-6-astra' } } })

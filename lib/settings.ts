@@ -28,6 +28,7 @@ function unknownFields(value: Json, known: string[], prefix: string, problems: s
 function text(value: Json, key: string, prefix: string, meaning: string, problems: string[]): string {
   if (value[key] === undefined) problems.push(`${prefix}${key} is missing: ${meaning}`)
   else if (!isText(value[key])) problems.push(`${prefix}${key} must be a non-empty string: ${meaning}`)
+  else if (value[key].trim() !== value[key]) problems.push(`${prefix}${key} must not have surrounding whitespace`)
   else return value[key]
   return ''
 }

@@ -15,7 +15,7 @@ const homeWith = (content?: string) => {
 const written = (home: string) => JSON.parse(fs.readFileSync(path.join(home, 'settings.json'), 'utf8'))
 
 // Answers questions in order; '' accepts the default. `gh` knows who is signed in and which bots have tokens.
-function script(answers: string[], options: { tokenFails?: boolean } = {}) {
+function script(answers: string[], options: { tokenFails?: boolean; tokenLogin?: string } = {}) {
   const asked: string[] = []
   const calls: string[][] = []
   const deps: InitDeps = {
@@ -24,9 +24,9 @@ function script(answers: string[], options: { tokenFails?: boolean } = {}) {
       return answers.shift() ?? ''
     },
     say: () => undefined,
-    gh: (args) => {
+    gh: (args, env) => {
       calls.push(args)
-      if (args[0] === 'api' && args[1] === 'user') return 'owner-login'
+      if (args[0] === 'api' && args[1] === 'user') return env?.GH_TOKEN ? (options.tokenLogin ?? 'bot-login') : 'owner-login'
       if (args[0] === 'auth') {
         if (options.tokenFails) throw new Error('no token')
         return 'token'
@@ -67,6 +67,12 @@ test('Greptile with no answer for the threshold uses 4', async () => {
 test('a bot token that does not work writes nothing and says how to sign the bot in', async () => {
   const home = homeWith()
   await assert.rejects(runInit(home, script(['', 'bot-login'], { tokenFails: true }).deps), /gh is not signed in as bot-login[\s\S]*gh auth login[\s\S]*Nothing was written/)
+  assert.equal(fs.existsSync(path.join(home, 'settings.json')), false)
+})
+
+test('a bot token for another account writes nothing and names the configured bot', async () => {
+  const home = homeWith()
+  await assert.rejects(runInit(home, script(['', 'bot-login'], { tokenLogin: 'someone-else' }).deps), /saved token does not authenticate as bot-login[\s\S]*Nothing was written/)
   assert.equal(fs.existsSync(path.join(home, 'settings.json')), false)
 })
 

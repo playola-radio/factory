@@ -98,11 +98,19 @@ const GREPTILE = 'greptile-apps'
 const POLL_MS = 2 * 60 * 1000
 
 export function botToken(login: string): string {
+  let token: string
   try {
-    return execFileSync('gh', ['auth', 'token', '--user', login], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    token = execFileSync('gh', ['auth', 'token', '--user', login], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
   } catch {
     throw new Error(`gh is not signed in as ${login}. Run: gh auth login, sign in as ${login}, then gh auth switch to go back to your own account.`)
   }
+  try {
+    const authenticated = execFileSync('gh', ['api', 'user', '-q', '.login'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GH_TOKEN: token } }).trim()
+    if (authenticated.toLowerCase() === login.toLowerCase()) return token
+  } catch {
+    // reported below with the bot's configured login
+  }
+  throw new Error(`The saved token does not authenticate as ${login}. Sign in again as ${login} with gh auth login.`)
 }
 
 export function defaultBranch(repoId: string, login: string): string {
