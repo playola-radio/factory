@@ -80,21 +80,26 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
         } catch (error) {
           return end('fix failed', [`The after-push command \`${command}\` failed: ${(error as Error).message}`])
         }
+        if (workshop.head(worktree) !== github.head) {
+          return end('fix failed', [`The after-push command \`${command}\` made a commit, and it must not commit.`])
+        }
         afterPushStamp = (afterPush.whenChanged && fingerprint(worktree, afterPush.whenChanged)) ?? ''
         save()
       }
     }
+    let justPosted: Set<string> | undefined
     if (held && synced) {
+      justPosted = new Set(held.answers.filter(({ item }) => !item.fromOwner).map(({ item }) => item.id))
       post(held.answers, held.reReview)
       held = undefined
       save()
       record('review round')
     }
+    const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !held?.answers.some(({ item: heldItem }) => heldItem.id === item.id) && !justPosted?.has(item.id))
     if (github.checks === 'pending') {
       await workshop.wait()
       continue
     }
-    const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !held?.answers.some(({ item: heldItem }) => heldItem.id === item.id))
     if (synced && github.approved && github.checks === 'passed' && !github.conflicts) {
       workshop.merge(number, github.head)
       const questions = unanswered.filter((item) => item.fromOwner)
@@ -133,14 +138,11 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
 
     const pushed = workshop.head(worktree) !== github.head
     if (pushed) workshop.push(worktree, branch)
-    if (!synced) {
-      save()
-      continue
-    }
     const reReview = pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow
-    if (pushed && afterPush) held = { answers: [...(held?.answers ?? []), ...answers], reReview: held?.reReview || reReview }
+    if (afterPush && (pushed || !synced)) held = { answers: [...(held?.answers ?? []), ...answers], reReview: held?.reReview || reReview }
     else post(answers, reReview)
     save()
     if (!held) record('review round')
+    if (!synced) continue
   }
 }

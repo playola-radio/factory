@@ -227,7 +227,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 const NO_RULES: RepoRules = { afterPush: null, qaRules: null }
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number) => void; reReviewBelow?: number; rules?: RepoRules } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; reReviewBelow?: number; rules?: RepoRules } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -288,7 +288,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     afterPush: (worktree, command) => {
       steps.push('after push')
       const run = did.afterPushes.push(command)
-      options.afterPush?.(worktree, run)
+      options.afterPush?.(worktree, run, () => { head = `after-push-${run}` })
     },
     pullRequestState: () => ({ state: 'open', head: pushedHead, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptile: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
     answerReview: async (worktree, prompt) => {
@@ -812,6 +812,16 @@ test('a failed after-push command needs attention and blocks replies, re-review 
   assert.equal(storedStamp(world), '')
 })
 
+test('an after-push command that commits fails without storing its stamp or merging', async () => {
+  const { report, did, world } = await buildPr({
+    rules: PUBLISH,
+    afterPush: (_worktree, _run, commit) => commit(),
+  })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.match(('review' in report && report.review?.problems.join('\n')) || '', /after-push command `publish 7` made a commit/)
+  assert.deepEqual([did.merged, storedStamp(world)], [0, undefined])
+})
+
 test("while the worktree's head differs from GitHub's, nothing is run, posted or merged", async () => {
   const { did, replies } = await buildPr({ rules: PUBLISH, github: [{ approved: true, head: 'someone-else', items: [OWNER_COMMENT], greptile: { score: 0 } }, { state: 'closed' }] })
   assert.deepEqual([did.afterPushes.length, did.merged, replies.length, did.reReviews], [0, 0, 0, 0])
@@ -824,7 +834,26 @@ test('a review fix left unpushed by a failed check is retried on the next build 
   assert.deepEqual([did.pushed, replies.length], [0, 0])
   answer.checks = []
   assert.equal(reviewState(await build()), 'merged')
-  assert.deepEqual([reviewPrompts.length, did.pushed, replies.length, did.reReviews, did.afterPushes.length], [3, 2, 1, 1, 1])
+  assert.deepEqual([reviewPrompts.length, did.pushed, replies.length, did.reReviews, did.afterPushes.length], [2, 1, 1, 1, 1])
+})
+
+test('answers from an unsynchronized pass are posted after its push and after-push command succeed', async () => {
+  const answer = { checks: [{ command: 'make lint', passed: false }] }
+  let answers = 0
+  const pending = { items: [BOT_THREAD], greptile: { score: 0 } }
+  const { did, replies, reviewPrompts, build } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    answer,
+    whileAnswering: (worktree) => {
+      answers += 1
+      if (answers === 2) record(worktree, '.qa-artifacts/a/result.json', 'fixed')
+    },
+    github: [pending, pending, { items: [BOT_THREAD], greptile: { score: 0 } }, { approved: true }],
+  })
+  answer.checks = []
+  assert.equal(reviewState(await build()), 'merged')
+  assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
+  assert.deepEqual([reviewPrompts.length, did.reReviews, did.afterPushes.length], [2, 1, 2])
 })
 
 test('a failed after-push command after a review fix leaves its replies and re-review unposted', async () => {
