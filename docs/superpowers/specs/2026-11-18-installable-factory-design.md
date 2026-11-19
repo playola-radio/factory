@@ -138,7 +138,7 @@ own design folder (`lib/readiness.ts:17-23`), not its path in the repo.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `afterPush.command` | yes, when `afterPush` is present | trusted publisher command run from the base checkout once the PR is open; `{pr}` is replaced with the PR number |
+| `afterPush.command` | yes, when `afterPush` is present | shell command run in the PR's worktree once the PR is open; `{pr}` is replaced with the PR number |
 | `afterPush.whenChanged` | no | glob of files in the worktree, relative and inside the repo (matched with Node's `fs.globSync`); the command runs again only when those files changed (see After-push command) |
 
 It is checked as strictly as the settings file: invalid JSON, a wrong type or an unknown field is an error that
@@ -235,8 +235,6 @@ to keep in step.
   worktree's head equals GitHub's head. When the heads differ, this pass defers all following review-loop effects:
   it posts no replies, requests no re-review, and cannot merge. A later pass may continue only after its worktree
   matches GitHub's head and the command has succeeded. With matching heads, it runs if either:
-  - the report has `afterPushPending: true` from a previous failed attempt, even when `whenChanged` now matches no
-    files; or
   - it has never succeeded on this PR: the PR report has **no** `afterPushStamp` field at all. An empty string is
     a stored stamp and means it has succeeded; the test is "absent", never "empty", or a repo without
     `whenChanged` would run its command on every pass; or
@@ -254,25 +252,23 @@ to keep in step.
   nothing, as today. The fingerprint is taken **after the command finishes**, so a command that writes into the
   matched files doesn't look like a change on the next pass.
 - **No matching files** (the folder is missing or empty) counts as unchanged: the command doesn't run, and the
-  stored stamp is kept, unless `afterPushPending` is true. That is the case when the worktree was rebuilt (a fresh
-  checkout has no git-ignored files), and there is nothing new to publish; the evidence already posted stays on
-  the PR. When an agent records evidence again, the glob matches files whose fingerprint differs, and the command
-  runs. The very first run is the exception: it happens whether or not anything matches, as
-  `make ux-evidence-publish` does today when the PR opens.
-- It runs as `sh -c <command>` with `{pr}` replaced by the PR number (always a number), but its working directory
-  is the factory's immutable `baseView`, not the PR worktree. The command, Makefile targets, and scripts it invokes
-  therefore come only from trusted base code. `FACTORY_AFTER_PUSH_WORKTREE` names the PR worktree so that this
-  trusted publisher can read evidence as data; it must never execute files from that path. Only this trusted
-  publisher receives the bot's minimally scoped `GH_TOKEN`. It has a 30-minute timeout.
+  stored stamp is kept. That is the case when the worktree was rebuilt (a fresh checkout has no git-ignored
+  files), and there is nothing new to publish; the evidence already posted stays on the PR. When an agent records
+  evidence again, the glob matches files whose fingerprint differs, and the command runs. The very first run is
+  the exception: it happens whether or not anything matches, as `make ux-evidence-publish` does today when the PR
+  opens.
+- It runs as `sh -c <command>` with `{pr}` replaced by the PR number (always a number). The working directory
+  is the worktree, and the environment includes the bot's `GH_TOKEN`, as `make ux-evidence-publish` gets today
+  (its target reads `.qa-artifacts` from the folder it runs in). It has a 30-minute timeout.
 - **Success** stores the fingerprint as `afterPushStamp` in the PR report (an empty string when there is no
-  `whenChanged` or nothing matches) and removes `afterPushPending`. Both fields are optional, so reports saved
-  before this change still load.
-- **Failure** sets `afterPushPending: true` without changing `afterPushStamp`. The PR ends as `needs attention`,
-  showing the command's last output. Nothing more is posted, no re-review is requested, and no merge is attempted.
-  The next `factory build` retries the pending command even if its matching files have since disappeared, so the
-  command must be safe to run twice.
-- The README says plainly that this is a trusted base publisher that reads untrusted PR artifacts as data; PR code
-  never runs with the bot token.
+  `whenChanged` or nothing matches). The field is optional, so reports saved before this change still load.
+- **Failure** stores nothing. The PR ends as `needs attention`, showing the command's last output. Nothing more is
+  posted, no re-review is requested, and no merge is attempted. The next `factory build` sees no new stamp and
+  runs it again, so the command must be safe to run twice. If the matched files have vanished by then, there is
+  nothing left to publish, and it doesn't run.
+- The README says plainly that this command runs repo code with the bot's token, so it must be something the
+  owner trusts. Reading it from the base branch means only merged code can change it; the PR's own code already
+  runs in that worktree for every test and check.
 
 ## `factory init`
 
@@ -512,9 +508,9 @@ the three files.
 - After-push: runs once when the PR opens; with `whenChanged`, runs again only after a matched file's contents
   change, and not when only unmatched files change; without it, never again, including when the stored stamp is
   an empty string; a command that writes into the matched files isn't rerun; no matching files neither runs it
-  nor clears the stamp unless a pending failure requires a retry; a failure leaves `needs attention` with no
-  replies posted, blocks re-review and merge, and the next run retries even if the matching files disappeared.
-  The publisher starts from base code and receives the PR worktree only as data, never as executable code.
+  nor clears the stamp; a failure leaves `needs attention` with no replies posted, blocks re-review and merge,
+  and the next run retries and then carries on; when the worktree's head differs from GitHub's, the pass posts
+  nothing and doesn't merge.
 - `config.json` and `qa-rules.md` are read again for each design, so a change merged into the base during a long
   build applies to the next design.
 
