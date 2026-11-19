@@ -25,8 +25,9 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type })
   let review: ReviewReport = { rounds: report.review?.rounds ?? [], answered: report.review?.answered ?? [], problems: [] }
   let afterPushStamp = report.afterPushStamp
+  let held = report.held
   const save = (): PrReport => {
-    const saved = { ...report, review, ...(afterPushStamp === undefined ? {} : { afterPushStamp }) }
+    const saved: PrReport = { ...report, review, afterPushStamp, held }
     world.store.savePrReport(claim.repo, saved)
     return saved
   }
@@ -57,26 +58,50 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     review = { ...review, rounds: [...review.rounds, { ...wave, head, forBots: failedChecks.length > 0 || items.some((item) => !item.fromOwner) }] }
     return labelled.map(({ label, item }) => ({ label, item, reply: wave.replies.find((candidate) => candidate.id === label) }))
   }
-  const post = (answers: Awaited<ReturnType<typeof ask>>, reReview: boolean) => {
-    for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
-    if (reReview) workshop.requestReview(number)
-    review = { ...review, answered: [...review.answered, ...answers.filter(({ item }) => item.kind === 'comment').map(({ item }) => item.id)] }
+  // Posts held replies one at a time, saving after each, so a build that stops partway never posts one twice.
+  // A held re-review request is dropped once GitHub shows a score at or above the threshold.
+  const postHeld = (score: number | null | undefined, items: ReviewItem[]) => {
+    const justPosted = new Set<string>()
+    while (held) {
+      const [next, ...rest] = held.replies
+      if (next) {
+        const current = items.find((item) => item.id === next.item.id)
+        const changed = next.item.kind === 'thread' && current !== undefined && (current.latest !== next.item.latest || (current.fromOwner && !next.item.fromOwner))
+        workshop.reply(number, next.item, next.body, next.resolve && !changed)
+        if (!changed) justPosted.add(next.item.id)
+        if (next.item.kind === 'comment') review = { ...review, answered: [...review.answered, next.item.id] }
+        held = { ...held, replies: rest }
+      } else {
+        if (held.reReview && !(score != null && score >= reReviewBelow)) workshop.requestReview(number)
+        held = undefined
+      }
+      save()
+    }
+    return justPosted
   }
   let toldOwner = false
-  let held: { answers: Awaited<ReturnType<typeof ask>>; reReview: boolean } | undefined
 
   for (;;) {
     const github = workshop.pullRequestState(number)
     if (github.state !== 'open') return end(github.state)
     const { afterPush } = rules
-    // Until the worktree matches GitHub and the after-push command has run on it, a pass may fix and push but posts nothing and cannot merge.
-    const synced = !afterPush || workshop.head(worktree) === github.head
-    if (afterPush && synced) {
+    // With an after-push command, every effect below needs the worktree at GitHub's head, so bring the two together first without rewriting GitHub's branch.
+    if (afterPush && workshop.head(worktree) !== github.head) {
+      const caughtUp = workshop.catchUp(worktree, branch, github.head)
+      if (caughtUp === 'conflicts') {
+        return end('fix failed', [`The branch has new commits both on GitHub and in the worktree, and merging them would conflict. In ${worktree}, merge origin/${branch}, resolve the conflicts and commit, then build again.`])
+      }
+      if (caughtUp === 'pushed' || caughtUp === 'changed') {
+        await workshop.wait()
+        continue
+      }
+    }
+    if (afterPush) {
       const changed = afterPush.whenChanged ? fingerprint(worktree, afterPush.whenChanged) : null
       if (afterPushStamp === undefined || (changed !== null && changed !== afterPushStamp)) {
         const command = afterPush.command.replaceAll('{pr}', String(number))
         try {
-          workshop.afterPush(worktree, command)
+          await workshop.afterPush(worktree, command)
         } catch (error) {
           return end('fix failed', [`The after-push command \`${command}\` failed: ${(error as Error).message}`])
         }
@@ -88,19 +113,16 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       }
     }
     let justPosted: Set<string> | undefined
-    if (held && synced) {
-      justPosted = new Set(held.answers.map(({ item }) => item.id))
-      post(held.answers, held.reReview)
-      held = undefined
-      save()
+    if (held) {
+      justPosted = postHeld(github.greptile?.score, github.items)
       record('review round')
     }
-    const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !held?.answers.some(({ item: heldItem }) => heldItem.id === item.id) && !justPosted?.has(item.id))
+    const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !justPosted?.has(item.id))
     if (github.checks === 'pending') {
       await workshop.wait()
       continue
     }
-    if (synced && github.approved && github.checks === 'passed' && !github.conflicts) {
+    if (github.approved && github.checks === 'passed' && !github.conflicts) {
       workshop.merge(number, github.head)
       const questions = unanswered.filter((item) => item.fromOwner)
       if (questions.length > 0) {
@@ -139,10 +161,12 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     const pushed = workshop.head(worktree) !== github.head
     if (pushed) workshop.push(worktree, branch)
     const reReview = pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow
-    if (afterPush && (pushed || !synced)) held = { answers: [...(held?.answers ?? []), ...answers], reReview: held?.reReview || reReview }
-    else post(answers, reReview)
+    held = { replies: answers.map(({ item, reply }) => ({ item: { id: item.id, kind: item.kind, latest: item.latest, fromOwner: item.fromOwner, text: item.text }, body: reply!.reply, resolve: reply!.action === 'fixed' && !item.fromOwner })), reReview }
+    // With an after-push command, a pushed fix's replies wait until the command has succeeded on it.
     save()
-    if (!held) record('review round')
-    if (!synced) continue
+    if (!(afterPush && pushed)) {
+      postHeld(github.greptile?.score, github.items)
+      record('review round')
+    }
   }
 }

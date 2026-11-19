@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -58,13 +58,15 @@ export interface Workshop {
   markDesignBuilt(worktree: string, design: string): boolean
   openPullRequest(worktree: string, branch: string, base: string, title: string, body: string): PullRequest
   // Runs the repo's after-push command in the worktree with the bot's token; throws with its last output when it fails.
-  afterPush(worktree: string, command: string): void
+  afterPush(worktree: string, command: string): Promise<void>
   pullRequestState(number: number): PullRequestState
   answerReview(worktree: string, prompt: string, step: string): Promise<ReviewWave>
   push(worktree: string, branch: string): void
+  // Brings the worktree and the PR branch on GitHub to the same commit, never rewriting GitHub's: fast-forwards to it, pushes local commits on top of it, or merges the two and pushes. A conflicting merge is undone.
+  catchUp(worktree: string, branch: string, theirs: string): 'fast-forwarded' | 'pushed' | 'conflicts' | 'changed'
   // Marks a comment as seen with an eyes reaction.
   acknowledge(item: ReviewItem): void
-  reply(number: number, item: ReviewItem, body: string, resolve: boolean): void
+  reply(number: number, item: Pick<ReviewItem, 'id' | 'kind' | 'text'>, body: string, resolve: boolean): void
   requestReview(number: number): void
   merge(number: number, head: string): void
   wait(): Promise<void>
@@ -92,6 +94,8 @@ export function branchProblems(workshop: Workshop, worktree: string, base: strin
 const IMPLEMENT_TIMEOUT_MS = 4 * 60 * 60 * 1000
 const REVIEW_TIMEOUT_MS = 20 * 60 * 1000
 const AFTER_PUSH_TIMEOUT_MS = 30 * 60 * 1000
+const AFTER_PUSH_OUTPUT_CAP = 64 * 1024 * 1024
+const STOP_GRACE_MS = 5000
 const schema = (name: string) => path.join(import.meta.dirname, '..', 'schemas', `${name}.json`)
 
 const GREPTILE = 'greptile-apps'
@@ -146,6 +150,64 @@ export function baseView(repo: string, worktreesDir: string, base: string): stri
 function scoreOf(body: string): number | null {
   const score = /Confidence Score: (\d)\/5/.exec(body)?.[1]
   return score === undefined ? null : Number(score)
+}
+
+// Runs the command in its own process group so that, when it is stopped, everything it started is stopped with it. Rejects with its last output when it fails.
+export function runAfterPush(cwd: string, command: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('sh', ['-c', command], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const signalGroup = (signal: NodeJS.Signals) => {
+      try {
+        process.kill(-child.pid!, signal)
+      } catch {
+        // the whole group has already exited
+      }
+    }
+    let stopped: string | undefined
+    const stop = (reason: string) => {
+      if (stopped) return
+      stopped = reason
+      signalGroup('SIGTERM')
+      setTimeout(() => signalGroup('SIGKILL'), STOP_GRACE_MS)
+    }
+    let interruptedBy: NodeJS.Signals | undefined
+    // Its own group no longer gets the terminal's Ctrl-C, so stopping the build stops the group (SIGTERM, as background jobs ignore SIGINT), then stops the build as the signal would have.
+    const interrupted = (signal: NodeJS.Signals) => {
+      if (interruptedBy) return
+      interruptedBy = signal
+      stop(`it was stopped by ${signal}`)
+      stopListening()
+    }
+    const stopListening = () => {
+      process.off('SIGINT', interrupted)
+      process.off('SIGTERM', interrupted)
+    }
+    process.on('SIGINT', interrupted)
+    process.on('SIGTERM', interrupted)
+    const timer = setTimeout(() => stop(`it ran past ${timeoutMs / 60_000} minutes and was stopped`), timeoutMs)
+    const chunks: Buffer[] = []
+    let size = 0
+    const collect = (chunk: Buffer) => {
+      size += chunk.length
+      if (size > AFTER_PUSH_OUTPUT_CAP) stop('its output passed 64 MiB and it was stopped')
+      else chunks.push(chunk)
+    }
+    child.stdout.on('data', collect)
+    child.stderr.on('data', collect)
+    child.on('error', (error) => {
+      clearTimeout(timer)
+      stopListening()
+      reject(error)
+    })
+    child.on('close', (code, signal) => {
+      clearTimeout(timer)
+      stopListening()
+      if (interruptedBy) return process.kill(process.pid, interruptedBy)
+      if (code === 0 && !stopped) return resolve()
+      const output = Buffer.concat(chunks).toString('utf8').trim().split('\n').slice(-20).join('\n')
+      reject(new Error(`${stopped ?? (signal ? `it was stopped by ${signal}` : `exit ${code}`)}${output ? `\n${output}` : ''}`))
+    })
+  })
 }
 
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' }).trim()
@@ -205,18 +267,29 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       const url = existing?.url ?? gh('pr', 'create', '-R', repoId, '--head', branch, '--base', base, '--title', title, '--body', body)
       return { number: Number(url.split('/').pop()), url }
     },
-    afterPush(worktree, command) {
-      const result = spawnSync('sh', ['-c', command], { ...asBot(worktree), timeout: AFTER_PUSH_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
-      if (result.status === 0) return
-      const how = (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' ? 'it ran past 30 minutes and was stopped'
-        : result.error ? result.error.message
-        : result.signal ? `it was stopped by ${result.signal}`
-        : `exit ${result.status}`
-      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim().split('\n').slice(-20).join('\n')
-      throw new Error(`${how}${output ? `\n${output}` : ''}`)
-    },
+    afterPush: async (worktree, command) => runAfterPush(worktree, command, asBot(worktree).env, AFTER_PUSH_TIMEOUT_MS),
     push(worktree, branch) {
       execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], asBot(worktree))
+    },
+    catchUp(worktree, branch, theirs) {
+      git(worktree, 'fetch', 'origin', branch)
+      if (git(worktree, 'rev-parse', `origin/${branch}`) !== theirs) return 'changed'
+      const isAncestor = (older: string, newer: string) => spawnSync('git', ['-C', worktree, 'merge-base', '--is-ancestor', older, newer]).status === 0
+      if (isAncestor('HEAD', theirs)) {
+        git(worktree, 'merge', '--ff-only', theirs)
+        return 'fast-forwarded'
+      }
+      if (!isAncestor(theirs, 'HEAD')) {
+        try {
+          execFileSync('git', ['-C', worktree, 'merge', '--no-edit', theirs], { stdio: 'pipe', env: { ...process.env, ...botEnv } })
+        } catch (error) {
+          if (git(worktree, 'diff', '--name-only', '--diff-filter=U') === '') throw new Error(`Could not merge ${theirs} into ${worktree}: ${(error as Error).message}`)
+          git(worktree, 'merge', '--abort')
+          return 'conflicts'
+        }
+      }
+      this.push(worktree, branch)
+      return 'pushed'
     },
     pullRequestState(number) {
       const [repoOwner, name] = repoId.split('/')
