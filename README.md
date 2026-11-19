@@ -7,17 +7,22 @@ repo ending in an `ImplementationPlan.md`. The factory then builds that plan one
 implemented by one AI agent in a fresh worktree. The other vendor's agent tries to break it and audits it for
 excess. The factory then opens the PR, answers the reviewers and merges once the owner approves.
 
-> Still being made generic: the owner, bot account, Greptile and models come from a settings file (see Setup), and
-> each repo's after-push command and QA rules from its own `factory/` folder. The design rules are still built into
-> the `design-feature` skill.
+The owner, bot account, Greptile and models come from a settings file on your computer (see Setup). Each repo's
+after-push command, QA rules and design rules come from its own `factory/` folder.
 
 ## Install
 
-Needs Node 24+, `git`, the GitHub CLI (`gh`), and both the `claude` and `codex` CLIs. You also need two GitHub
-accounts (see Setup). Greptile is optional.
+You need:
+
+- Node 24+ and `git`
+- the GitHub CLI (`gh`), signed in
+- both the `claude` and `codex` CLIs
+- two GitHub accounts, yours and a bot's (see Setup)
+- optionally Greptile, to review your repos' PRs, and [pen.dev](https://pen.dev), if you draw screens in it
+
+Clone the repo from `<your fork or this repo's URL>`, then:
 
 ```bash
-git clone <your fork or this repo's URL>
 cd factory
 ./install.sh
 ```
@@ -71,7 +76,7 @@ Notes:
 
 - A build's PRs go into `--base`, or the branch the design was started on, or the repo's default branch on GitHub.
 - Run one `factory build <repo>` per terminal, one terminal per repo. Build state is kept per repo under
-  `~/.config/factory/`.
+  `~/.config/factory/`, so several repos can build side by side.
 - Do not change `owner` or `bot` while a build is in progress: the review loop tells the owner's requests from its own
   replies by account. Run `factory abandon <repo>` first.
 
@@ -83,13 +88,16 @@ Each repo you build keeps its designs, and optionally its own build rules, in a 
 <repo>/factory/
   config.json       the after-push command
   qa-rules.md       the repo's evidence and QA rules, pasted into the agents' prompts
+  design-rules.md   the repo's design rules, read by the design-feature skill
   ready/<NNN>-<name>/
   done/<NNN>-<name>/
 ```
 
-Both files are optional; a repo with neither has no after-push command and no extra QA rules. The factory reads
-them from the base branch as GitHub has it, never from a PR's own branch, and reads them again before each design,
-so a rule merged into the base during a long build applies to the next design. Commit them to the repo by hand.
+All three files are optional; a repo with none has no after-push command and no extra QA or design rules. The
+factory reads `config.json` and `qa-rules.md` from the base branch as GitHub has it, never from a PR's own branch,
+and reads them again before each design, so a rule merged into the base during a long build applies to the next
+design. The `design-feature` skill reads `design-rules.md` from your checkout, which it requires to be the base or
+freshly cut from it. Commit all three to the repo by hand.
 
 `config.json` holds the after-push command:
 
@@ -111,11 +119,53 @@ misspelt field stops `factory build` before any work, naming the file, branch an
 trust. Because it is read from the base branch, only merged code can change it.
 
 `qa-rules.md` is plain text: what evidence the agents should record and how to check it (videos, screenshots,
-which device). It is pasted as is into the prompts of the agents that implement, check and fix each PR.
+which device). It is pasted as is into the prompts of the agents that implement, check and fix each PR. For example:
+
+```markdown
+Where the repo's rules call for UX evidence: a PR that delivers "Done when" items records a video of the flow that carries those items out from start to finish, including the taps that save. Screenshots are only for a restyle of a screen that already works. Name in your summary any item the recording does not show, and why.
+
+A review finding: UX evidence that is screenshots where this PR delivers "Done when" items, or whose flow stops before carrying those items out.
+```
+
+`design-rules.md` is plain text too: where the `design-feature` skill should look and what it should do at the steps
+that depend on your repo. Typical entries are where the backend lives, which docs to read first, how screens are drawn
+and exported as PNGs, any backend conventions, and which design files to commit with the design folder. For example:
+
+```markdown
+- **Backend:** models and endpoints live in the `acme/api` repo. From another repo, read them at `~/code/api` and record its `main` SHA in `Design.md`.
+- **Screens:** drawn in `design/app.fig`; export every approved frame as a PNG into `screenshots/`, named `<screen>--<state>.png`.
+- **Read what exists:** `docs/features/` and the current screens in `design/app.fig`.
+- **Backend conventions:** REST resources, `PUT` never `PATCH`.
+- **Ship:** commit `design/app.fig` with the design folder.
+```
+
+## Designing a feature
+
+Start a Claude Code or Codex session in the target repo and ask it to design the feature (for example "design
+recording a show"). The `design-feature` skill runs a conversation that ends in one numbered folder,
+`factory/ready/<NNN>-<name>/`, with the screens, the API contract, any model changes and an `ImplementationPlan.md`,
+and opens it as one `design:` PR. It reads the repo's `factory/design-rules.md` if there is one. Without one it still
+works, but asks you how you will supply each screen as a PNG.
+
+Run `factory status <repo-path>` to see whether a design is ready to build, and `factory finalize <repo-path> <NNN>
+--author <claude|codex>` to have the other vendor review the plan and mark it finished. The skill does this for you
+at the end of the conversation. `./install.sh` links `factory` into `~/.local/bin`, which must be on your PATH; alternatively, run `~/.local/bin/factory` directly.
+
+## Building
+
+```bash
+factory build <repo-path>
+```
+
+builds the next ready design into PRs, one at a time. Each PR is implemented in a fresh worktree by one agent, tried
+and audited by the other vendor's agent, opened against the base branch, and then watched: the factory answers
+review comments, runs the repo's after-push command, and merges once the owner approves. Run one `factory build` per
+repo, each in its own terminal.
 
 ## Use
 
 ```bash
+factory init                   # write your settings file
 factory status <repo-path>     # which designs are ready to build
 factory finalize <repo-path>   # check and finish a design's implementation plan
 factory build <repo-path>      # build the next design into PRs
@@ -123,3 +173,7 @@ factory abandon <repo-path>    # give up the design in progress
 ```
 
 Run `factory` with no arguments for the full usage. Tests: `npm test`.
+
+## License
+
+MIT. See `LICENSE`.
