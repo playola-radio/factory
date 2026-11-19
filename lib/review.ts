@@ -1,6 +1,7 @@
 import type { World } from './build.ts'
 import { readDesign } from './design.ts'
-import { designValues, renderPrompt } from './prompts.ts'
+import { designValues, qaRulesBlock, renderPrompt } from './prompts.ts'
+import type { RepoRules } from './repo.ts'
 import type { Claim, PrReport, ReviewReport } from './store.ts'
 import type { PlannedPr } from './types.ts'
 import { branchProblems } from './workshop.ts'
@@ -15,7 +16,7 @@ const SITUATION = {
 }
 
 // Stays with one open PR until it is merged or closed: fixes or answers what reviewers say, and merges once the owner approves.
-export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop, reReviewBelow: number): Promise<PrReport> {
+export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop, reReviewBelow: number, rules: RepoRules): Promise<PrReport> {
   const { worktree, branch } = report
   if (!report.pullRequest) throw new Error(`PR ${pr.number} has not been opened`)
   const { number, url } = report.pullRequest
@@ -47,6 +48,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
         situation: SITUATION[situation].replace('{base}', claim.base),
         items: labelled.map(({ label, item }) => `- **${label}** [${item.fromOwner ? 'owner' : 'reviewer'}]${item.where ? ` \`${item.where}\`` : ''}\n${item.text.replace(/^/gm, '  > ')}`).join('\n\n') || 'none',
         failed_checks: failedChecks.join(', ') || 'none',
+        qa_rules: qaRulesBlock(rules.qaRules, claim.base),
       }),
       `review-pr-${pr.number}-round-${review.rounds.length + 1}`,
     )

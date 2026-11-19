@@ -22,7 +22,7 @@ and "paid review" wording, the full README walkthrough, `LICENSE`, and the plan 
 **Goal**: `{{qa_rules}}` in `implement.md`, `finish.md`, `gate-break.md`, `gate-fix.md`, `review-fix.md`, filled by `qaRulesBlock(text, base)` with a block headed "This repo's QA rules (`factory/qa-rules.md` on `<base>`)", or nothing. `implement.md` step 5 becomes "Record whatever UX evidence this repo's QA rules ask for."; the `gate-break.md` rule sentence names "its QA rules below" and loses the `qa/ux/` sentence. `gate-excess.md` and `review-plan.md` are unchanged.
 **Success Criteria**: with rules, their text is in all five prompts and not in the excess audit; without, no block; the worktree's own `factory/qa-rules.md` is never used; `qa/ux/`, "on staging", `.qa-artifacts` appear nowhere in `prompts/`.
 **Tests**: extend `test/build.test.ts`: rules reach implement, finish, gate-break, gate-fix and review-fix prompts; absent with no rules; a `qa-rules.md` written into the worktree is not used.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: The after-push command
 **Goal**: `Workshop.afterPush(worktree, command)` runs `sh -c` in the worktree with the bot's `GH_TOKEN` and a 30-minute timeout, throwing with the command's last output on failure; `fingerprint(worktree, glob)` hashes sorted relative path + contents of matched files (`fs.globSync`), `null` when nothing matches; `watchPr` runs the step once per pass right after the PR is read as open. `publishEvidence` and `evidenceStamp` are deleted. `PrReport.afterPushStamp?: string`.

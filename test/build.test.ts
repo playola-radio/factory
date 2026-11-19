@@ -12,6 +12,8 @@ import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildDesign, buildNextPr } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
+import { NO_RULES } from '../lib/repo.ts'
+import type { RepoRules } from '../lib/repo.ts'
 import { diskStore } from '../lib/store.ts'
 import type { Settings } from '../lib/settings.ts'
 import type { Claim, FixWave, Implementation, ReviewWave } from '../lib/store.ts'
@@ -225,7 +227,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; reReviewBelow?: number } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; reReviewBelow?: number; rules?: RepoRules } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -235,6 +237,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const reviews: string[] = []
   const fixPrompts: string[] = []
   let audits = 0
+  const excessPrompts: string[] = []
   const opened: { branch: string; base: string; title: string; body: string }[] = []
   // Each look at GitHub sees the next state; the last one repeats. With none given, the owner has approved.
   const github = [...(options.github ?? [{ approved: true }])]
@@ -260,8 +263,9 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       if (findings === 'fails') throw new Error('codex died')
       return { findings }
     },
-    auditExcess: async () => {
+    auditExcess: async (_worktree, prompt) => {
       audits += 1
+      excessPrompts.push(prompt)
       return { findings: options.excess?.[audits - 1] ?? [] }
     },
     fix: async (_worktree, prompt) => {
@@ -299,8 +303,8 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     },
     wait: async () => void (did.waits += 1),
   }
-  const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4)
-  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4) }
+  const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4, options.rules ?? NO_RULES)
+  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, excessPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4, options.rules ?? NO_RULES) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -631,6 +635,41 @@ test('finishing a design frees the repo and forgets its PRs, so the next design 
   assert.equal(world.store.claimFor('owner/app'), null)
   assert.equal(world.store.prReport('owner/app', 1), null)
   assert.equal(events().at(-1), 'design finished')
+})
+
+const QA = { afterPush: null, qaRules: 'Record a video of every Done when item.' }
+const QA_BLOCK = /## This repo's QA rules \(`factory\/qa-rules\.md` on `feature\/x`\)\n\nRecord a video of every Done when item\.\n$/
+
+test("the repo's QA rules reach the implementer, the break-it pass, the gate fix and the review fix, but not the excess audit", async () => {
+  const { prompts, reviews, fixPrompts, excessPrompts, reviewPrompts } = await buildPr({ rules: QA, breaks: [[P3]], github: [{ items: [BOT_THREAD] }, { approved: true }] })
+  for (const prompt of [prompts[0], reviews[0], fixPrompts[0], reviewPrompts[0]]) assert.match(prompt, QA_BLOCK)
+  assert.doesNotMatch(excessPrompts[0], /QA rules/)
+})
+
+test("the repo's QA rules reach the implementer finishing a PR", async () => {
+  const { build, prompts } = await buildPr({ rules: QA, result: BLOCKED })
+  await build()
+  assert.match(prompts[1], /already committed[\s\S]*## This repo's QA rules/)
+  assert.match(prompts[1], QA_BLOCK)
+})
+
+test('with no QA rules there is no QA rules block', async () => {
+  const { build, prompts, reviews, fixPrompts, reviewPrompts } = await buildPr({ result: BLOCKED })
+  await build()
+  const second = await buildPr({ breaks: [[P3]], github: [{ items: [BOT_THREAD] }, { approved: true }] })
+  for (const prompt of [...prompts, ...reviews, ...fixPrompts, ...reviewPrompts, ...second.reviews, ...second.fixPrompts, ...second.reviewPrompts]) {
+    assert.doesNotMatch(prompt, /This repo's QA rules \(/)
+  }
+})
+
+test("QA rules written into the PR's worktree are never used: only the base's are", async () => {
+  const { prompts, reviews, reviewPrompts } = await buildPr({
+    rules: QA,
+    whileImplementing: (worktree) => fs.writeFileSync(path.join(worktree, 'factory', 'qa-rules.md'), 'Screenshots are fine.'),
+    github: [{ items: [BOT_THREAD] }, { approved: true }],
+  })
+  for (const prompt of [prompts[0], reviews[0], reviewPrompts[0]]) assert.doesNotMatch(prompt, /Screenshots are fine/)
+  assert.match(reviewPrompts[0], QA_BLOCK)
 })
 
 test('evidence recorded again during a fix is posted to the PR after the push', async () => {

@@ -25,4 +25,4 @@ Whatever blocked the earlier run may have been cleared since; the repo's rules m
 
 If a step still needs something you do not have, finish everything else, commit it, and list that step under `blockers` with exactly what you tried and what happened.
 
-Return: `status` (`done` only when every change and test in the section is committed and every check passes, else `blocked`), a `summary` of the whole PR as it now stands and anything the reviewer should look at, `checks` (each command you ran last and whether it passed), and `blockers` (empty when done).
+Return: `status` (`done` only when every change and test in the section is committed and every check passes, else `blocked`), a `summary` of the whole PR as it now stands and anything the reviewer should look at, `checks` (each command you ran last and whether it passed), and `blockers` (empty when done).{{qa_rules}}

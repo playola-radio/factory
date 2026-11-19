@@ -118,7 +118,7 @@ async function main() {
       const runDir = path.join(HOME, 'runs', `${path.basename(repo)}-${report.design}-build`)
       console.error(`${report.state}: ${report.design} on ${base}. Agent traces: ${runDir}/traces`)
       const withModel = { ...settings, models: { ...settings.models, claude: values.model || settings.models.claude } }
-      const pr = await buildDesign(report.claim.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, withModel), settings.greptile?.reReviewBelow ?? 0)
+      const pr = await buildDesign(report.claim.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, withModel), settings.greptile?.reReviewBelow ?? 0, rules)
       console.log(JSON.stringify({ design: report.design, base, ...pr }, null, 2))
       if (pr.state !== 'all PRs merged') {
         process.exitCode = 2
