@@ -59,7 +59,7 @@ export function checkSettings(json: unknown): { settings: Settings } | { problem
     if (!isObject(json.greptile)) problems.push('greptile must be an object (use {} for the defaults)')
     else {
       unknownFields(json.greptile, ['reReviewBelow'], 'greptile.', problems)
-      const below = json.greptile.reReviewBelow ?? DEFAULT_RE_REVIEW_BELOW
+      const below = json.greptile.reReviewBelow === undefined ? DEFAULT_RE_REVIEW_BELOW : json.greptile.reReviewBelow
       if (typeof below !== 'number' || !Number.isInteger(below) || below < 1 || below > 5) {
         problems.push('greptile.reReviewBelow must be a whole number from 1 to 5: ask Greptile to review again when its last score was below it')
       } else greptile = { reReviewBelow: below }
