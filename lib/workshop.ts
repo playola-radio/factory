@@ -66,7 +66,7 @@ export interface Workshop {
   catchUp(worktree: string, branch: string, theirs: string): 'fast-forwarded' | 'pushed' | 'conflicts'
   // Marks a comment as seen with an eyes reaction.
   acknowledge(item: ReviewItem): void
-  reply(number: number, item: ReviewItem, body: string, resolve: boolean): void
+  reply(number: number, item: Pick<ReviewItem, 'id' | 'kind' | 'text'>, body: string, resolve: boolean): void
   requestReview(number: number): void
   merge(number: number, head: string): void
   wait(): Promise<void>
@@ -168,7 +168,7 @@ export function runAfterPush(cwd: string, command: string, env: NodeJS.ProcessEn
       if (stopped) return
       stopped = reason
       signalGroup('SIGTERM')
-      setTimeout(() => signalGroup('SIGKILL'), STOP_GRACE_MS).unref()
+      setTimeout(() => signalGroup('SIGKILL'), STOP_GRACE_MS)
     }
     const timer = setTimeout(() => stop(`it ran past ${timeoutMs / 60_000} minutes and was stopped`), timeoutMs)
     const chunks: Buffer[] = []

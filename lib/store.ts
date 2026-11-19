@@ -94,7 +94,7 @@ export interface ReviewReport {
 
 // Replies to a pushed fix, and whether to ask for another review, waiting for the after-push command to succeed on it.
 export interface HeldReplies {
-  replies: { item: ReviewItem; body: string; resolve: boolean }[]
+  replies: { item: Pick<ReviewItem, 'id' | 'kind' | 'text'>; body: string; resolve: boolean }[]
   reReview: boolean
 }
 

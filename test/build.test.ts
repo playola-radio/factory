@@ -227,7 +227,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 const NO_RULES: RepoRules = { afterPush: null, qaRules: null }
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; catchUp?: 'behind' | 'diverged' | 'conflicts'; reReviewBelow?: number; rules?: RepoRules } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; catchUp?: 'behind' | 'diverged' | 'conflicts'; replyFails?: (id: string) => boolean; reReviewBelow?: number; rules?: RepoRules } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -319,6 +319,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     },
     acknowledge: (item) => void steps.push(`eyes on ${item.id}`),
     reply: (_number, item, body, resolved) => {
+      if (options.replyFails?.(item.id)) throw new Error('GitHub is down')
       steps.push('reply')
       replies.push({ id: item.id, body, resolved })
     },
@@ -939,12 +940,31 @@ test('replies held when the after-push command fails are kept in the report and 
     },
     github: [bot, bot, bot, { state: 'closed' }],
   })
-  assert.deepEqual(world.store.prReport(world.repoId, 1)?.held, { replies: [{ item: BOT_THREAD, body: 'reply to R1', resolve: true }], reReview: true })
+  assert.deepEqual(world.store.prReport(world.repoId, 1)?.held, { replies: [{ item: { id: 'T1', kind: 'thread', text: BOT_THREAD.text }, body: 'reply to R1', resolve: true }], reReview: true })
   assert.equal(replies.length, 0)
   assert.equal(reviewState(await build()), 'closed')
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
   assert.deepEqual([did.reReviews, reviewPrompts.length, did.afterPushes.length], [1, 1, 3])
   assert.equal(world.store.prReport(world.repoId, 1)?.held, undefined)
+})
+
+test('a build that stops partway through posting held replies leaves only the unposted ones for the next build', async () => {
+  const other: ReviewItem = { ...BOT_THREAD, id: 'T4', where: 'App.swift:4' }
+  const bots = { items: [BOT_THREAD, other], greptile: { score: 0 } }
+  let down = true
+  const { did, replies, build } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    afterPush: (_worktree, run) => {
+      if (run === 2) throw new Error('publish failed')
+    },
+    replyFails: (id) => id === 'T4' && down,
+    github: [bots, bots, bots, { items: [other], greptile: { score: 0 } }, { state: 'closed' }],
+  })
+  await assert.rejects(build(), /GitHub is down/)
+  down = false
+  assert.equal(reviewState(await build()), 'closed')
+  assert.deepEqual([replies.map(({ id }) => id), did.reReviews], [['T1', 'T4'], 1])
 })
 
 test('a review fix is replied to only after after-push succeeds on its new head', async () => {
