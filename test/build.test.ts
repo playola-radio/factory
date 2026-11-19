@@ -304,8 +304,14 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       pushedHead = head
     },
     acknowledge: (item) => void steps.push(`eyes on ${item.id}`),
-    reply: (_number, item, body, resolved) => void replies.push({ id: item.id, body, resolved }),
-    requestReview: () => void (did.reReviews += 1),
+    reply: (_number, item, body, resolved) => {
+      steps.push('reply')
+      replies.push({ id: item.id, body, resolved })
+    },
+    requestReview: () => {
+      steps.push('re-review')
+      did.reReviews += 1
+    },
     merge: (_number, observedHead?: string) => {
       did.merged += 1
       did.mergedHeads.push(observedHead)
@@ -819,6 +825,30 @@ test('a review fix left unpushed by a failed check is retried on the next build 
   answer.checks = []
   assert.equal(reviewState(await build()), 'merged')
   assert.deepEqual([reviewPrompts.length, did.pushed, replies.length, did.reReviews, did.afterPushes.length], [3, 2, 1, 1, 1])
+})
+
+test('a failed after-push command after a review fix leaves its replies and re-review unposted', async () => {
+  const { report, did, replies } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    afterPush: (_worktree, run) => {
+      if (run === 2) throw new Error('publish failed')
+    },
+    github: [{ items: [BOT_THREAD], greptile: { score: 0 } }],
+  })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.deepEqual([did.pushed, did.reReviews, did.merged, did.afterPushes.length, replies.length], [1, 0, 0, 2, 0])
+})
+
+test('a review fix is replied to only after after-push succeeds on its new head', async () => {
+  const { did, replies, steps } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    github: [{ items: [BOT_THREAD], greptile: { score: 0 } }, { approved: true, items: [BOT_THREAD], greptile: { score: 0 } }],
+  })
+  assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
+  assert.deepEqual(did.afterPushes, ['publish 7', 'publish 7'])
+  assert.deepEqual(steps.slice(-3), ['after push', 'reply', 're-review'])
 })
 
 test('the after-push command runs in the worktree with the bot token and fails with its last output', { concurrency: false }, () => {

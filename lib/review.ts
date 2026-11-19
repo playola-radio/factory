@@ -57,7 +57,13 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     review = { ...review, rounds: [...review.rounds, { ...wave, head, forBots: failedChecks.length > 0 || items.some((item) => !item.fromOwner) }] }
     return labelled.map(({ label, item }) => ({ label, item, reply: wave.replies.find((candidate) => candidate.id === label) }))
   }
+  const post = (answers: Awaited<ReturnType<typeof ask>>, reReview: boolean) => {
+    for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
+    if (reReview) workshop.requestReview(number)
+    review = { ...review, answered: [...review.answered, ...answers.filter(({ item }) => item.kind === 'comment').map(({ item }) => item.id)] }
+  }
   let toldOwner = false
+  let held: { answers: Awaited<ReturnType<typeof ask>>; reReview: boolean } | undefined
 
   for (;;) {
     const github = workshop.pullRequestState(number)
@@ -78,11 +84,17 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
         save()
       }
     }
+    if (held && synced) {
+      post(held.answers, held.reReview)
+      held = undefined
+      save()
+      record('review round')
+    }
     if (github.checks === 'pending') {
       await workshop.wait()
       continue
     }
-    const unanswered = github.items.filter((item) => !review.answered.includes(item.id))
+    const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !held?.answers.some(({ item: heldItem }) => heldItem.id === item.id))
     if (synced && github.approved && github.checks === 'passed' && !github.conflicts) {
       workshop.merge(number, github.head)
       const questions = unanswered.filter((item) => item.fromOwner)
@@ -125,10 +137,10 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       save()
       continue
     }
-    for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
-    if (pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow) workshop.requestReview(number)
-    review = { ...review, answered: [...review.answered, ...items.filter((item) => item.kind === 'comment').map((item) => item.id)] }
+    const reReview = pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow
+    if (pushed && afterPush) held = { answers: [...(held?.answers ?? []), ...answers], reReview: held?.reReview || reReview }
+    else post(answers, reReview)
     save()
-    record('review round')
+    if (!held) record('review round')
   }
 }
