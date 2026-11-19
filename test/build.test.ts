@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { once } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -990,20 +991,37 @@ test('the after-push command runs in the worktree with the bot token and fails w
   }
 })
 
+const running = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+const eventually = async (condition: () => boolean) => {
+  for (let tries = 0; tries < 100 && !condition(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+  return condition()
+}
+const BACKGROUND_CHILD = 'sleep 300 & echo $! > child.pid; wait'
+const childPid = (worktree: string) => Number(fs.readFileSync(path.join(worktree, 'child.pid'), 'utf8'))
+
 test('an after-push command that runs past its time limit is stopped along with every process it started', async () => {
   const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-after-push-'))
-  await assert.rejects(runAfterPush(worktree, 'sleep 300 & echo $! > child.pid; wait', process.env, 300), /ran past .* minutes and was stopped/)
-  const child = Number(fs.readFileSync(path.join(worktree, 'child.pid'), 'utf8'))
-  const running = () => {
-    try {
-      process.kill(child, 0)
-      return true
-    } catch {
-      return false
-    }
-  }
-  for (let tries = 0; tries < 40 && running(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 50))
-  assert.equal(running(), false)
+  await assert.rejects(runAfterPush(worktree, BACKGROUND_CHILD, process.env, 300), /ran past .* minutes and was stopped/)
+  assert.equal(await eventually(() => !running(childPid(worktree))), true)
+})
+
+test('stopping the build with Ctrl-C stops the after-push command and every process it started', async () => {
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-after-push-'))
+  const workshopFile = path.resolve(import.meta.dirname, '..', 'lib', 'workshop.ts')
+  const script = `import { runAfterPush } from ${JSON.stringify(workshopFile)}; await runAfterPush(process.env.WORKTREE, ${JSON.stringify(BACKGROUND_CHILD)}, process.env, 60000)`
+  const build = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: 'ignore', env: { ...process.env, WORKTREE: worktree } })
+  assert.equal(await eventually(() => fs.existsSync(path.join(worktree, 'child.pid')) && childPid(worktree) > 0), true)
+  build.kill('SIGINT')
+  const [, signal] = await once(build, 'exit')
+  assert.equal(signal, 'SIGINT')
+  assert.equal(await eventually(() => !running(childPid(worktree))), true)
 })
 
 const AUTHOR = { GIT_AUTHOR_NAME: 'Owner', GIT_AUTHOR_EMAIL: 'owner@example.com', GIT_COMMITTER_NAME: 'Owner', GIT_COMMITTER_EMAIL: 'owner@example.com' }

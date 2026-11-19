@@ -163,6 +163,18 @@ export function runAfterPush(cwd: string, command: string, env: NodeJS.ProcessEn
         // the whole group has already exited
       }
     }
+    // Its own group no longer gets the terminal's Ctrl-C, so stopping the build stops the group (SIGTERM, as background jobs ignore SIGINT), then stops the build as the signal would have.
+    const interrupted = (signal: NodeJS.Signals) => {
+      signalGroup('SIGTERM')
+      stopListening()
+      process.kill(process.pid, signal)
+    }
+    const stopListening = () => {
+      process.off('SIGINT', interrupted)
+      process.off('SIGTERM', interrupted)
+    }
+    process.on('SIGINT', interrupted)
+    process.on('SIGTERM', interrupted)
     let stopped: string | undefined
     const stop = (reason: string) => {
       if (stopped) return
@@ -182,10 +194,12 @@ export function runAfterPush(cwd: string, command: string, env: NodeJS.ProcessEn
     child.stderr.on('data', collect)
     child.on('error', (error) => {
       clearTimeout(timer)
+      stopListening()
       reject(error)
     })
     child.on('close', (code, signal) => {
       clearTimeout(timer)
+      stopListening()
       if (code === 0 && !stopped) return resolve()
       const output = Buffer.concat(chunks).toString('utf8').trim().split('\n').slice(-20).join('\n')
       reject(new Error(`${stopped ?? (signal ? `it was stopped by ${signal}` : `exit ${code}`)}${output ? `\n${output}` : ''}`))
