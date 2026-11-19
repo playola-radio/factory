@@ -5,8 +5,9 @@ import type { World } from './build.ts'
 import { readDesign } from './design.ts'
 import { runGate } from './gate.ts'
 import { watchPr } from './review.ts'
-import { designValues, renderPrompt } from './prompts.ts'
+import { designValues, qaRulesBlock, renderPrompt } from './prompts.ts'
 import { readApprovedPlan } from './readiness.ts'
+import type { RepoRules } from './repo.ts'
 import type { Claim, Implementation, PrReport } from './store.ts'
 import type { PlannedPr } from './types.ts'
 import { branchProblems, planIsIntact } from './workshop.ts'
@@ -25,14 +26,14 @@ const MERGE_NOTE = {
 }
 
 // Builds PR after PR, each cut from the base branch once the one before it has merged there.
-export async function buildDesign(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop, reReviewBelow: number): Promise<PrBuildReport> {
+export async function buildDesign(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop, reReviewBelow: number, rules: RepoRules): Promise<PrBuildReport> {
   for (;;) {
-    const report = await buildNextPr(prs, claim, world, workshop, reReviewBelow)
+    const report = await buildNextPr(prs, claim, world, workshop, reReviewBelow, rules)
     if (!('review' in report) || report.review?.state !== 'merged') return report
   }
 }
 
-export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop, reReviewBelow: number): Promise<PrBuildReport> {
+export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, workshop: Workshop, reReviewBelow: number, rules: RepoRules): Promise<PrBuildReport> {
   const pr = prs.find((planned) => world.store.prReport(claim.repo, planned.number)?.review?.state !== 'merged')
   if (!pr) return { state: 'all PRs merged' }
   const previous = world.store.prReport(claim.repo, pr.number)
@@ -42,7 +43,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   const last = pr === prs.at(-1)
   if (previous?.pullRequest) {
     if (last && workshop.markDesignBuilt(previous.worktree, claim.design)) workshop.push(previous.worktree, previous.branch)
-    return watchPr(pr, claim, previous, world, workshop, reReviewBelow)
+    return watchPr(pr, claim, previous, world, workshop, reReviewBelow, rules)
   }
   const openPr = (gated: PrReport): Promise<PrReport> => {
     if (last) workshop.markDesignBuilt(gated.worktree, claim.design)
@@ -50,10 +51,10 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
     const opened = { ...gated, pullRequest: workshop.openPullRequest(gated.worktree, gated.branch, claim.base, pr.title, body) }
     world.store.savePrReport(claim.repo, opened)
     world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type: 'pr opened' })
-    return watchPr(pr, claim, opened, world, workshop, reReviewBelow)
+    return watchPr(pr, claim, opened, world, workshop, reReviewBelow, rules)
   }
   const gate = async (implemented: PrReport): Promise<PrReport> => {
-    const gated = { ...implemented, gate: await runGate(pr, claim, implemented, world, workshop) }
+    const gated = { ...implemented, gate: await runGate(pr, claim, implemented, world, workshop, rules.qaRules) }
     world.store.savePrReport(claim.repo, gated)
     return gated.gate.state === 'clean' ? openPr(gated) : gated
   }
@@ -78,7 +79,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
 
   const event = { repo: claim.repo, design: claim.design, pr: pr.number }
   world.store.record({ ...event, at: world.now(), type: 'pr started' })
-  const values = { ...designValues(readDesign(worktree, number)), pr_number: String(pr.number), pr_title: pr.title, base: claim.base, branch }
+  const values = { ...designValues(readDesign(worktree, number)), pr_number: String(pr.number), pr_title: pr.title, base: claim.base, branch, qa_rules: qaRulesBlock(rules.qaRules, claim.base) }
   const prompt = previous && merge
     ? renderPrompt('finish', {
         ...values,
@@ -118,7 +119,7 @@ function pullRequestBody(report: PrReport, design: string, number: number, total
   return [
     '# What & why',
     report.implementation.summary,
-    `Built by the factory from \`designs/ready/${design}/\` (PR ${number} of ${total} in its plan).`,
+    `Built by the factory from \`factory/ready/${design}/\` (PR ${number} of ${total} in its plan).`,
     '## Review gate',
     `Clean after ${rounds.length} round${rounds.length === 1 ? '' : 's'}: ${settled.length - declined.length} findings fixed, ${declined.length} declined.`,
     ...declined.map((disposition) => `- ${disposition.id} declined: ${disposition.reason}`),

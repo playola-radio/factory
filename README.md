@@ -2,13 +2,14 @@
 
 Turns finished feature designs into reviewed pull requests.
 
-You design a feature with the `design-feature` skill, which writes a folder under `designs/ready/` in the target
+You design a feature with the `design-feature` skill, which writes a folder under `factory/ready/` in the target
 repo ending in an `ImplementationPlan.md`. The factory then builds that plan one PR at a time. Each PR is
 implemented by one AI agent in a fresh worktree. The other vendor's agent tries to break it and audits it for
 excess. The factory then opens the PR, answers the reviewers and merges once the owner approves.
 
-> Still being made generic: the owner, bot account, Greptile and models now come from a settings file (see Setup).
-> The `designs/` folder name, the after-PR step and the repo's QA and design rules are still built in.
+> Still being made generic: the owner, bot account, Greptile and models come from a settings file (see Setup), and
+> each repo's after-push command and QA rules from its own `factory/` folder. The design rules are still built into
+> the `design-feature` skill.
 
 ## Install
 
@@ -73,6 +74,44 @@ Notes:
   `~/.config/factory/`.
 - Do not change `owner` or `bot` while a build is in progress: the review loop tells the owner's requests from its own
   replies by account. Run `factory abandon <repo>` first.
+
+## The repo's `factory/` folder
+
+Each repo you build keeps its designs, and optionally its own build rules, in a `factory/` folder:
+
+```text
+<repo>/factory/
+  config.json       the after-push command
+  qa-rules.md       the repo's evidence and QA rules, pasted into the agents' prompts
+  ready/<NNN>-<name>/
+  done/<NNN>-<name>/
+```
+
+Both files are optional; a repo with neither has no after-push command and no extra QA rules. The factory reads
+them from the base branch as GitHub has it, never from a PR's own branch, and reads them again before each design,
+so a rule merged into the base during a long build applies to the next design. Commit them to the repo by hand.
+
+`config.json` holds the after-push command:
+
+```json
+{ "afterPush": { "command": "make ux-evidence-publish PR={pr}", "whenChanged": ".qa-artifacts/*/result.json" } }
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `afterPush.command` | yes, when `afterPush` is present | shell command run in the PR's worktree once the PR is open; `{pr}` is replaced with the PR number |
+| `afterPush.whenChanged` | no | glob of files in the worktree, relative and inside the repo; the command runs again only when those files changed |
+
+The command runs once when the PR opens and, with `whenChanged`, again whenever the matched files change. Without
+`whenChanged` it never runs again. If it fails, the PR needs attention, nothing more is posted or merged, and the
+next `factory build` runs it again, so it must be safe to run twice. Like the settings file, an invalid or
+misspelt field stops `factory build` before any work, naming the file, branch and field.
+
+**The after-push command runs this repo's code with the bot's GitHub token.** Only put a command there that you
+trust. Because it is read from the base branch, only merged code can change it.
+
+`qa-rules.md` is plain text: what evidence the agents should record and how to check it (videos, screenshots,
+which device). It is pasted as is into the prompts of the agents that implement, check and fix each PR.
 
 ## Use
 

@@ -10,7 +10,7 @@ import type { PlanContent } from '../lib/plan.ts'
 
 function plannedRepo() {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-ready-'))
-  const dir = path.join(repo, 'designs', 'ready', '001-example')
+  const dir = path.join(repo, 'factory', 'ready', '001-example')
   fs.mkdirSync(path.join(dir, 'screenshots'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'screenshots', 'a--default.png'), 'png')
   fs.writeFileSync(path.join(dir, 'Design.md'), '![a](screenshots/a--default.png)\n\n## Done when\n\n- [ ] first outcome\n')
@@ -59,4 +59,15 @@ test('a plan file the factory did not finish is not buildable', () => {
   const { repo, dir } = plannedRepo()
   fs.writeFileSync(path.join(dir, 'ImplementationPlan.md'), '# 001-example — Implementation plan\n')
   assert.match(reasons(repo), /not finished by the factory/)
+})
+
+test('a design finished in designs/ready keeps its finished plan once moved to factory/ready', () => {
+  const { repo, dir, plan } = plannedRepo()
+  const design = readDesign(repo, '001')
+  const old = path.join(repo, 'designs', 'ready', '001-example')
+  fs.mkdirSync(path.dirname(old), { recursive: true })
+  fs.renameSync(dir, old)
+  recordApprovedPlan(repo, { ...design, dir: path.join('designs', 'ready', '001-example') }, plan)
+  fs.renameSync(old, dir)
+  assert.deepEqual(designStatuses(repo), [{ design: '001-example', buildable: true, reasons: [] }])
 })

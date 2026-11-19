@@ -14,14 +14,14 @@ const FIX_HINT = 'Run "factory init" to fix it.'
 
 type Json = Record<string, unknown>
 
-const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value)
-const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== ''
+export const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value)
+export const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== ''
 
-function unknownFields(value: Json, known: string[], prefix: string, problems: string[]) {
+export function unknownFields(value: Json, known: string[], prefix: string, problems: string[], noun = 'setting') {
   for (const key of Object.keys(value)) {
     if (known.includes(key)) continue
     const close = known.find((name) => name.toLowerCase() === key.toLowerCase())
-    problems.push(`${prefix}${key} is not a setting${close ? ` (did you mean ${prefix}${close}?)` : ''}`)
+    problems.push(`${prefix}${key} is not a ${noun}${close ? ` (did you mean ${prefix}${close}?)` : ''}`)
   }
 }
 

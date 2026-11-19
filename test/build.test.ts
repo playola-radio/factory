@@ -5,19 +5,20 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { abandon, finish, repoIdFromRemote, startOrResume } from '../lib/build.ts'
+import { abandon, finish, nextDesign, repoIdFromRemote, startOrResume } from '../lib/build.ts'
 import type { World } from '../lib/build.ts'
 import { readDesign } from '../lib/design.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildDesign, buildNextPr } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
+import type { RepoRules } from '../lib/repo.ts'
 import { diskStore } from '../lib/store.ts'
 import type { Settings } from '../lib/settings.ts'
 import type { Claim, FixWave, Implementation, ReviewWave } from '../lib/store.ts'
 
 function addDesign(repo: string, name: string, planned: boolean) {
-  const dir = path.join(repo, 'designs', 'ready', name)
+  const dir = path.join(repo, 'factory', 'ready', name)
   fs.mkdirSync(path.join(dir, 'screenshots'), { recursive: true })
   fs.writeFileSync(path.join(dir, 'screenshots', 'a--default.png'), 'png')
   fs.writeFileSync(path.join(dir, 'Design.md'), '![a](screenshots/a--default.png)\n\n## Done when\n\n- [ ] first outcome\n')
@@ -30,7 +31,7 @@ function addDesign(repo: string, name: string, planned: boolean) {
 
 function setup(designs: [string, boolean][], branches: string[] = []) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-build-'))
-  fs.mkdirSync(path.join(repo, 'designs', 'ready'), { recursive: true })
+  fs.mkdirSync(path.join(repo, 'factory', 'ready'), { recursive: true })
   for (const [name, planned] of designs) addDesign(repo, name, planned)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-'))
   const world: World = {
@@ -76,9 +77,31 @@ test('refuses when GitHub already has factory branches for the design', () => {
   assert.equal(world.store.claimFor('owner/app'), null)
 })
 
-test('reports nothing to build when designs/ready is empty', () => {
+test('reports nothing to build when factory/ready is empty', () => {
   const { repo, world } = setup([])
   assert.deepEqual(startOrResume(repo, world, 'develop'), { state: 'nothing to build' })
+})
+
+test("the repo's rules are read again for each design, so a change merged into the base reaches the next one", () => {
+  const { repo, world } = setup([['001-first', true], ['002-second', true]])
+  fs.mkdirSync(path.join(repo, 'factory'), { recursive: true })
+  fs.writeFileSync(path.join(repo, 'factory', 'qa-rules.md'), 'old rules')
+  const first = nextDesign(repo, world, 'develop')
+  assert.deepEqual([first.report.state, first.rules.qaRules], ['started', 'old rules'])
+  fs.rmSync(path.join(repo, 'factory', 'ready', '001-first'), { recursive: true })
+  finish(world)
+  fs.writeFileSync(path.join(repo, 'factory', 'qa-rules.md'), 'new rules')
+  fs.writeFileSync(path.join(repo, 'factory', 'config.json'), '{"afterPush":{"command":"echo {pr}"}}')
+  const second = nextDesign(repo, world, 'develop')
+  assert.equal(second.report.state === 'started' && second.report.design, '002-second')
+  assert.deepEqual(second.rules, { afterPush: { command: 'echo {pr}' }, qaRules: 'new rules' })
+})
+
+test('a bad repo config stops the build before a design is claimed', () => {
+  const { repo, world } = setup([['001-first', true]])
+  fs.writeFileSync(path.join(repo, 'factory', 'config.json'), '{"afterpush":{}}')
+  assert.throws(() => nextDesign(repo, world, 'develop'), /factory\/config\.json on develop: afterpush is not a field/)
+  assert.equal(world.store.claimFor('owner/app'), null)
 })
 
 test('abandoning frees the repo for the next build', () => {
@@ -201,9 +224,10 @@ test('uninstall removes the factory command linked into this repository', () => 
   assert.equal(fs.existsSync(command), false)
 })
 
+const NO_RULES: RepoRules = { afterPush: null, qaRules: null }
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; reReviewBelow?: number } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; whileAnswering?: (worktree: string) => void; afterPush?: (worktree: string, run: number, commit: () => void) => void; reReviewBelow?: number; rules?: RepoRules } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -213,14 +237,16 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const reviews: string[] = []
   const fixPrompts: string[] = []
   let audits = 0
+  const excessPrompts: string[] = []
   const opened: { branch: string; base: string; title: string; body: string }[] = []
   // Each look at GitHub sees the next state; the last one repeats. With none given, the owner has approved.
   const github = [...(options.github ?? [{ approved: true }])]
   const reviewPrompts: string[] = []
   const replies: { id: string; body: string; resolved: boolean }[] = []
-  const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, evidencePosts: 0 }
+  const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, afterPushes: [] as string[] }
   const steps: string[] = []
   let head = 'abc'
+  let pushedHead = head
   const workshop: Workshop = {
     prepareWorktree: () => options.worktree ?? repo,
     mergeBase: (_worktree, base) => {
@@ -238,8 +264,9 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       if (findings === 'fails') throw new Error('codex died')
       return { findings }
     },
-    auditExcess: async () => {
+    auditExcess: async (_worktree, prompt) => {
       audits += 1
+      excessPrompts.push(prompt)
       return { findings: options.excess?.[audits - 1] ?? [] }
     },
     fix: async (_worktree, prompt) => {
@@ -255,30 +282,44 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     openPullRequest: (_worktree, branch, base, title, body) => {
       steps.push('opened')
       opened.push({ branch, base, title, body })
+      pushedHead = head
       return { number: 7, url: 'https://github.com/owner/app/pull/7' }
     },
-    evidenceStamp: () => (options.reRecords ? head : 'same'),
-    publishEvidence: () => void (did.evidencePosts += 1),
-    pullRequestState: () => ({ state: 'open', head, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptile: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
-    answerReview: async (_worktree, prompt) => {
+    afterPush: (worktree, command) => {
+      steps.push('after push')
+      const run = did.afterPushes.push(command)
+      options.afterPush?.(worktree, run, () => { head = `after-push-${run}` })
+    },
+    pullRequestState: () => ({ state: 'open', head: pushedHead, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptile: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
+    answerReview: async (worktree, prompt) => {
       reviewPrompts.push(prompt)
+      options.whileAnswering?.(worktree)
       const action = options.answerAction ?? 'fixed'
       if (action === 'fixed') head = `fix-${reviewPrompts.length}`
       const ids = [...prompt.matchAll(/\*\*(R\d+)\*\*/g)].map((match) => match[1])
       return { summary: 'answered', replies: ids.map((id) => ({ id, action, reply: `reply to ${id}` })), checks: [], blockers: [], ...options.answer }
     },
-    push: () => void (did.pushed += 1),
+    push: () => {
+      did.pushed += 1
+      pushedHead = head
+    },
     acknowledge: (item) => void steps.push(`eyes on ${item.id}`),
-    reply: (_number, item, body, resolved) => void replies.push({ id: item.id, body, resolved }),
-    requestReview: () => void (did.reReviews += 1),
+    reply: (_number, item, body, resolved) => {
+      steps.push('reply')
+      replies.push({ id: item.id, body, resolved })
+    },
+    requestReview: () => {
+      steps.push('re-review')
+      did.reReviews += 1
+    },
     merge: (_number, observedHead?: string) => {
       did.merged += 1
       did.mergedHeads.push(observedHead)
     },
     wait: async () => void (did.waits += 1),
   }
-  const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4)
-  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4) }
+  const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4, options.rules ?? NO_RULES)
+  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, excessPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4, options.rules ?? NO_RULES) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -300,7 +341,7 @@ test('a PR that comes through the gate clean is opened into the base branch unde
   const { report, opened } = await buildPr({ breaks: [[{ severity: 'P3', where: 'App.swift:1', problem: 'rare' }]], fix: { dispositions: [{ id: 'B1', action: 'declined', reason: 'not worth the complexity' }] } })
   assert.deepEqual('pullRequest' in report && report.pullRequest, { number: 7, url: 'https://github.com/owner/app/pull/7' })
   assert.deepEqual([opened[0].branch, opened[0].base, opened[0].title], ['factory/001-first/pr-1', 'feature/x', 'feature: do the thing'])
-  assert.match(opened[0].body, /built[\s\S]*designs\/ready\/001-first[\s\S]*0 findings fixed, 1 declined[\s\S]*B1 declined: not worth the complexity/)
+  assert.match(opened[0].body, /built[\s\S]*factory\/ready\/001-first[\s\S]*0 findings fixed, 1 declined[\s\S]*B1 declined: not worth the complexity/)
 })
 
 test('a PR the gate did not pass is not opened', async () => {
@@ -365,14 +406,14 @@ test('after three attempts a PR is left for the owner', async () => {
 test('an implementer that makes no commits or edits the design needs attention', async () => {
   const { report } = await buildPr({
     commits: [],
-    whileImplementing: (worktree) => fs.appendFileSync(path.join(worktree, 'designs', 'ready', '001-first', 'Design.md'), 'changed\n'),
+    whileImplementing: (worktree) => fs.appendFileSync(path.join(worktree, 'factory', 'ready', '001-first', 'Design.md'), 'changed\n'),
   })
   assert.deepEqual(report.state === 'needs attention' && report.problems, ['No commits were made.', 'The design folder or its plan was changed.'])
 })
 
 test('a base branch that does not hold the finished plan stops before any work', async () => {
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-empty-'))
-  fs.mkdirSync(path.join(empty, 'designs', 'ready'), { recursive: true })
+  fs.mkdirSync(path.join(empty, 'factory', 'ready'), { recursive: true })
   await assert.rejects(buildPr({ worktree: empty }), /does not hold the finished plan for 001-first/)
 })
 
@@ -489,7 +530,7 @@ test("a bot's finding is fixed, pushed, answered in its thread, resolved, and re
   const { report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptile: { score: 0 } }, { approved: true }] })
   assert.match(reviewPrompts[0], /\*\*R1\*\* \[reviewer\] `App.swift:9`\n  > greptile-apps: this breaks a repo rule/)
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
-  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, evidencePosts: 0 })
+  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, afterPushes: [] })
   assert.equal(reviewState(report), 'merged')
 })
 
@@ -598,9 +639,9 @@ test("the design's last PR moves the design to done before it is opened", async 
 
 test('a design is still found once it has been moved to done', async () => {
   const { repo } = setup([['001-first', true]])
-  fs.mkdirSync(path.join(repo, 'designs', 'done'))
-  fs.renameSync(path.join(repo, 'designs', 'ready', '001-first'), path.join(repo, 'designs', 'done', '001-first'))
-  assert.equal(readDesign(repo, '001').dir, path.join('designs', 'done', '001-first'))
+  fs.mkdirSync(path.join(repo, 'factory', 'done'))
+  fs.renameSync(path.join(repo, 'factory', 'ready', '001-first'), path.join(repo, 'factory', 'done', '001-first'))
+  assert.equal(readDesign(repo, '001').dir, path.join('factory', 'done', '001-first'))
 })
 
 test('finishing a design frees the repo and forgets its PRs, so the next design starts clean', async () => {
@@ -611,14 +652,39 @@ test('finishing a design frees the repo and forgets its PRs, so the next design 
   assert.equal(events().at(-1), 'design finished')
 })
 
-test('evidence recorded again during a fix is posted to the PR after the push', async () => {
-  const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }], reRecords: true })
-  assert.deepEqual([did.pushed, did.evidencePosts], [1, 1])
+const QA = { afterPush: null, qaRules: 'Record a video of every Done when item.' }
+const QA_BLOCK = /## This repo's QA rules \(`factory\/qa-rules\.md` on `feature\/x`\)\n\nRecord a video of every Done when item\.\n$/
+
+test("the repo's QA rules reach the implementer, the break-it pass, the gate fix and the review fix, but not the excess audit", async () => {
+  const { prompts, reviews, fixPrompts, excessPrompts, reviewPrompts } = await buildPr({ rules: QA, breaks: [[P3]], github: [{ items: [BOT_THREAD] }, { approved: true }] })
+  for (const prompt of [prompts[0], reviews[0], fixPrompts[0], reviewPrompts[0]]) assert.match(prompt, QA_BLOCK)
+  assert.doesNotMatch(excessPrompts[0], /QA rules/)
 })
 
-test('a fix that records nothing new posts no evidence', async () => {
-  const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }] })
-  assert.deepEqual([did.pushed, did.evidencePosts], [1, 0])
+test("the repo's QA rules reach the implementer finishing a PR", async () => {
+  const { build, prompts } = await buildPr({ rules: QA, result: BLOCKED })
+  await build()
+  assert.match(prompts[1], /already committed[\s\S]*## This repo's QA rules/)
+  assert.match(prompts[1], QA_BLOCK)
+})
+
+test('with no QA rules there is no QA rules block', async () => {
+  const { build, prompts, reviews, fixPrompts, reviewPrompts } = await buildPr({ result: BLOCKED })
+  await build()
+  const second = await buildPr({ breaks: [[P3]], github: [{ items: [BOT_THREAD] }, { approved: true }] })
+  for (const prompt of [...prompts, ...reviews, ...fixPrompts, ...reviewPrompts, ...second.reviews, ...second.fixPrompts, ...second.reviewPrompts]) {
+    assert.doesNotMatch(prompt, /This repo's QA rules \(/)
+  }
+})
+
+test("QA rules written into the PR's worktree are never used: only the base's are", async () => {
+  const { prompts, reviews, reviewPrompts } = await buildPr({
+    rules: QA,
+    whileImplementing: (worktree) => fs.writeFileSync(path.join(worktree, 'factory', 'qa-rules.md'), 'Screenshots are fine.'),
+    github: [{ items: [BOT_THREAD] }, { approved: true }],
+  })
+  for (const prompt of [prompts[0], reviews[0], reviewPrompts[0]]) assert.doesNotMatch(prompt, /Screenshots are fine/)
+  assert.match(reviewPrompts[0], QA_BLOCK)
 })
 
 test("the owner's comment gets an eyes reaction before work on it starts, and a bot's does not", async () => {
@@ -663,4 +729,174 @@ test('logins are matched without regard to case', { concurrency: false }, () => 
   })
   assert.equal(state.approved, true)
   assert.deepEqual(state.items, [])
+})
+
+const PUBLISH: RepoRules = { afterPush: { command: 'publish {pr}' }, qaRules: null }
+const PUBLISH_CHANGED: RepoRules = { afterPush: { command: 'publish {pr}', whenChanged: '.qa-artifacts/*/result.json' }, qaRules: null }
+const record = (worktree: string, file: string, text: string) => {
+  fs.mkdirSync(path.dirname(path.join(worktree, file)), { recursive: true })
+  fs.writeFileSync(path.join(worktree, file), text)
+}
+const storedStamp = (world: World) => world.store.prReport(world.repoId, 1)?.afterPushStamp
+
+test('the after-push command runs once when the PR opens, with the PR number, before the merge', async () => {
+  const { did, steps, world } = await buildPr({ rules: PUBLISH })
+  assert.deepEqual(did.afterPushes, ['publish 7'])
+  assert.deepEqual(steps, ['design marked built', 'opened', 'after push'])
+  assert.equal(did.merged, 1)
+  assert.equal(storedStamp(world), '')
+})
+
+test('with no after-push command nothing is run', async () => {
+  const { did } = await buildPr()
+  assert.deepEqual(did.afterPushes, [])
+})
+
+test('without whenChanged the command never runs again, even after a fix is pushed', async () => {
+  const { did } = await buildPr({ rules: PUBLISH, github: [{ items: [OWNER_THREAD] }, { approved: true }] })
+  assert.deepEqual([did.pushed, did.afterPushes.length], [1, 1])
+})
+
+test('with whenChanged the command runs again only when a matched file changed', async () => {
+  let round = 0
+  const { did } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileImplementing: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'first'),
+    whileAnswering: (worktree) => {
+      round += 1
+      if (round === 1) record(worktree, '.qa-artifacts/a/result.json', 'second')
+      else record(worktree, '.qa-artifacts/a/video.mp4', 'new video')
+    },
+    github: [{ items: [OWNER_THREAD] }, { items: [OWNER_THREAD, OWNER_COMMENT] }, { approved: true }],
+  })
+  assert.equal(round, 2)
+  assert.equal(did.afterPushes.length, 2)
+})
+
+test('a command that writes into the matched files is not run again for its own writes', async () => {
+  const { did } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    afterPush: (worktree, run) => record(worktree, '.qa-artifacts/a/result.json', `published ${run}`),
+    github: [{}, {}, { approved: true }],
+  })
+  assert.deepEqual([did.afterPushes.length, did.merged], [1, 1])
+})
+
+test('when no file matches, the command does not run and the stored stamp is kept', async () => {
+  const { did, world } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileImplementing: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'first'),
+    whileAnswering: (worktree) => fs.rmSync(path.join(worktree, '.qa-artifacts'), { recursive: true }),
+    answerAction: 'answered',
+    github: [{ items: [OWNER_THREAD] }, { approved: true }],
+  })
+  assert.deepEqual([did.afterPushes.length, did.merged], [1, 1])
+  assert.match(storedStamp(world) ?? '', /^[0-9a-f]{64}$/)
+})
+
+test('a failed after-push command needs attention and blocks replies, re-review and merge; the next build retries and carries on', async () => {
+  const { report, did, replies, reviewPrompts, events, build, world } = await buildPr({
+    rules: PUBLISH,
+    afterPush: (_worktree, run) => {
+      if (run === 1) throw new Error('publish failed:\nno evidence found')
+    },
+    github: [{ approved: true, items: [OWNER_COMMENT], greptile: { score: 0 } }],
+  })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.match(('review' in report && report.review?.problems.join('\n')) || '', /publish 7[\s\S]*no evidence found/)
+  assert.deepEqual([did.merged, did.reReviews, replies.length, reviewPrompts.length], [0, 0, 0, 0])
+  assert.equal(events().at(-1), 'pr needs attention')
+  assert.equal(storedStamp(world), undefined)
+  await build()
+  assert.deepEqual([did.afterPushes.length, did.merged], [2, 1])
+  assert.equal(storedStamp(world), '')
+})
+
+test('an after-push command that commits fails without storing its stamp or merging', async () => {
+  const { report, did, world } = await buildPr({
+    rules: PUBLISH,
+    afterPush: (_worktree, _run, commit) => commit(),
+  })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.match(('review' in report && report.review?.problems.join('\n')) || '', /after-push command `publish 7` made a commit/)
+  assert.deepEqual([did.merged, storedStamp(world)], [0, undefined])
+})
+
+test("while the worktree's head differs from GitHub's, nothing is run, posted or merged", async () => {
+  const { did, replies } = await buildPr({ rules: PUBLISH, github: [{ approved: true, head: 'someone-else', items: [OWNER_COMMENT], greptile: { score: 0 } }, { state: 'closed' }] })
+  assert.deepEqual([did.afterPushes.length, did.merged, replies.length, did.reReviews], [0, 0, 0, 0])
+})
+
+test('a review fix left unpushed by a failed check is retried on the next build and posted only once GitHub has it; the stored empty stamp keeps the command from running again', async () => {
+  const answer = { checks: [{ command: 'make lint', passed: false }] }
+  const pending = { items: [BOT_THREAD], greptile: { score: 0 } }
+  const { did, replies, reviewPrompts, build } = await buildPr({ rules: PUBLISH, answer, github: [pending, pending, pending, { approved: true }] })
+  assert.deepEqual([did.pushed, replies.length], [0, 0])
+  answer.checks = []
+  assert.equal(reviewState(await build()), 'merged')
+  assert.deepEqual([reviewPrompts.length, did.pushed, replies.length, did.reReviews, did.afterPushes.length], [2, 1, 1, 1, 1])
+})
+
+test('answers from an unsynchronized pass are posted after its push and after-push command succeed', async () => {
+  const answer = { checks: [{ command: 'make lint', passed: false }] }
+  let answers = 0
+  const pending = { items: [BOT_THREAD], greptile: { score: 0 } }
+  const { did, replies, reviewPrompts, build } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    answer,
+    whileAnswering: (worktree) => {
+      answers += 1
+      if (answers === 2) record(worktree, '.qa-artifacts/a/result.json', 'fixed')
+    },
+    github: [pending, pending, { items: [BOT_THREAD], greptile: { score: 0 } }, { approved: true }],
+  })
+  answer.checks = []
+  assert.equal(reviewState(await build()), 'merged')
+  assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
+  assert.deepEqual([reviewPrompts.length, did.reReviews, did.afterPushes.length], [2, 1, 2])
+})
+
+test("an owner's thread whose held reply is posted is not answered again in the same pass", async () => {
+  const { replies, reviewPrompts } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    github: [{ items: [OWNER_THREAD] }, { items: [OWNER_THREAD] }, { state: 'closed' }],
+  })
+  assert.deepEqual([replies.length, reviewPrompts.length], [1, 1])
+})
+
+test('a failed after-push command after a review fix leaves its replies and re-review unposted', async () => {
+  const { report, did, replies } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    afterPush: (_worktree, run) => {
+      if (run === 2) throw new Error('publish failed')
+    },
+    github: [{ items: [BOT_THREAD], greptile: { score: 0 } }],
+  })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.deepEqual([did.pushed, did.reReviews, did.merged, did.afterPushes.length, replies.length], [1, 0, 0, 2, 0])
+})
+
+test('a review fix is replied to only after after-push succeeds on its new head', async () => {
+  const { did, replies, steps } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    github: [{ items: [BOT_THREAD], greptile: { score: 0 } }, { approved: true, items: [BOT_THREAD], greptile: { score: 0 } }],
+  })
+  assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
+  assert.deepEqual(did.afterPushes, ['publish 7', 'publish 7'])
+  assert.deepEqual(steps.slice(-3), ['after push', 'reply', 're-review'])
+})
+
+test('the after-push command runs in the worktree with the bot token and fails with its last output', { concurrency: false }, () => {
+  const { workshop, restore } = workshopWithGitHubResponse(githubResponse())
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-after-push-'))
+  try {
+    workshop.afterPush(worktree, 'printf "%s" "$GH_TOKEN" > token.txt')
+    assert.equal(fs.readFileSync(path.join(worktree, 'token.txt'), 'utf8'), 'token')
+    assert.throws(() => workshop.afterPush(worktree, 'echo first; echo stale evidence >&2; exit 3'), /exit 3[\s\S]*stale evidence/)
+  } finally {
+    restore()
+  }
 })

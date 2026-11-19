@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -54,12 +54,11 @@ export interface Workshop {
   linesChanged(worktree: string, since: string): { added: number; deleted: number }
   commitMessages(worktree: string, base: string): string[]
   uncommittedFiles(worktree: string): string[]
-  // Moves the design to designs/done in one commit; false when it is already there.
+  // Moves the design to factory/done in one commit; false when it is already there.
   markDesignBuilt(worktree: string, design: string): boolean
   openPullRequest(worktree: string, branch: string, base: string, title: string, body: string): PullRequest
-  // Changes whenever evidence is recorded again.
-  evidenceStamp(worktree: string): string
-  publishEvidence(worktree: string, number: number): void
+  // Runs the repo's after-push command in the worktree with the bot's token; throws with its last output when it fails.
+  afterPush(worktree: string, command: string): void
   pullRequestState(number: number): PullRequestState
   answerReview(worktree: string, prompt: string, step: string): Promise<ReviewWave>
   push(worktree: string, branch: string): void
@@ -92,6 +91,7 @@ export function branchProblems(workshop: Workshop, worktree: string, base: strin
 
 const IMPLEMENT_TIMEOUT_MS = 4 * 60 * 60 * 1000
 const REVIEW_TIMEOUT_MS = 20 * 60 * 1000
+const AFTER_PUSH_TIMEOUT_MS = 30 * 60 * 1000
 const schema = (name: string) => path.join(import.meta.dirname, '..', 'schemas', `${name}.json`)
 
 const GREPTILE = 'greptile-apps'
@@ -191,9 +191,9 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     commitMessages: (worktree, base) => git(worktree, 'log', '--format=%B%x00', `origin/${base}..HEAD`).split('\0').map((message) => message.trim()).filter(Boolean),
     uncommittedFiles: (worktree) => git(worktree, 'status', '--porcelain').split('\n').filter(Boolean),
     markDesignBuilt(worktree, design) {
-      if (!fs.existsSync(path.join(worktree, 'designs', 'ready', design))) return false
-      fs.mkdirSync(path.join(worktree, 'designs', 'done'), { recursive: true })
-      git(worktree, 'mv', `designs/ready/${design}`, `designs/done/${design}`)
+      if (!fs.existsSync(path.join(worktree, 'factory', 'ready', design))) return false
+      fs.mkdirSync(path.join(worktree, 'factory', 'done'), { recursive: true })
+      git(worktree, 'mv', `factory/ready/${design}`, `factory/done/${design}`)
       execFileSync('git', ['-C', worktree, 'commit', '-m', `chore: mark design ${design} as built`], { env: { ...process.env, ...botEnv } })
       return true
     },
@@ -203,19 +203,17 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       this.push(worktree, branch)
       const existing = JSON.parse(gh('pr', 'list', '-R', repoId, '--head', branch, '--state', 'open', '--json', 'number,url'))[0] as PullRequest | undefined
       const url = existing?.url ?? gh('pr', 'create', '-R', repoId, '--head', branch, '--base', base, '--title', title, '--body', body)
-      const pullRequest = { number: Number(url.split('/').pop()), url }
-      this.publishEvidence(worktree, pullRequest.number)
-      return pullRequest
+      return { number: Number(url.split('/').pop()), url }
     },
-    evidenceStamp(worktree) {
-      const artifacts = path.join(worktree, '.qa-artifacts')
-      if (!fs.existsSync(artifacts)) return ''
-      return fs.readdirSync(artifacts).sort().map((id) => path.join(artifacts, id, 'result.json')).filter((file) => fs.existsSync(file)).map((file) => fs.readFileSync(file, 'utf8')).join('\n')
-    },
-    publishEvidence(worktree, number) {
-      const makefile = path.join(worktree, 'Makefile')
-      if (!fs.existsSync(makefile) || !/^ux-evidence-publish:/m.test(fs.readFileSync(makefile, 'utf8'))) return
-      execFileSync('make', ['ux-evidence-publish', `PR=${number}`], asBot(worktree))
+    afterPush(worktree, command) {
+      const result = spawnSync('sh', ['-c', command], { ...asBot(worktree), timeout: AFTER_PUSH_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
+      if (result.status === 0) return
+      const how = (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' ? 'it ran past 30 minutes and was stopped'
+        : result.error ? result.error.message
+        : result.signal ? `it was stopped by ${result.signal}`
+        : `exit ${result.status}`
+      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim().split('\n').slice(-20).join('\n')
+      throw new Error(`${how}${output ? `\n${output}` : ''}`)
     },
     push(worktree, branch) {
       execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], asBot(worktree))
