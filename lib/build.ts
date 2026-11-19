@@ -85,3 +85,9 @@ export function realWorld(repo: string, store: Store): World {
     now: () => new Date().toISOString(),
   }
 }
+
+// An explicit --base wins (and keeps the claim's own conflict error); otherwise the base an unfinished design was claimed on;
+// GitHub is asked only when neither is known.
+export function resolveBase(flag: string | undefined, claim: Claim | null, askGitHub: () => string): string {
+  return flag || claim?.base || askGitHub()
+}

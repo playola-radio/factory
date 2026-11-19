@@ -4,7 +4,7 @@ You are answering the review of one open pull request. Nobody is watching: do no
 
 **Where things stand:** {{situation}}
 
-**What reviewers said.** Each item is one review thread or comment, with everything said in it so far. `owner` is the person who approves this PR; the others are review bots.
+**What reviewers said.** Each item is one review thread or comment, with everything said in it so far. `owner` is the person who approves this PR; the others are other reviewers, people or bots.
 
 {{items}}
 
@@ -12,7 +12,7 @@ You are answering the review of one open pull request. Nobody is watching: do no
 
 **How to settle each item:**
 
-- **A bot's finding.** Check it against the code and the repo's written rules first. If it is right and it is a real bug or breaks a written rule of this repo, fix it in the simplest way that works. If it is minor, fix it only when the fix is small and leaves the code no harder to follow; otherwise decline it as not worth the complexity. If it is wrong, decline it and say what you verified.
+- **A reviewer's finding.** Check it against the code and the repo's written rules first. If it is right and it is a real bug or breaks a written rule of this repo, fix it in the simplest way that works. If it is minor, fix it only when the fix is small and leaves the code no harder to follow; otherwise decline it as not worth the complexity. If it is wrong, decline it and say what you verified.
 - **The owner asks for a change.** Make it.
 - **The owner asks a question.** A question is a question, not a request. Answer it honestly from the code and the design. If the code is the way it is for a good reason, give the reason and change nothing. Change the code only when the question shows you a real problem, and then say so.
 - **The owner replied to something you said earlier.** If they gave a reason or told you to do it anyway, do it. If they asked a further question, answer it.
