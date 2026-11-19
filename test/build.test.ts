@@ -10,7 +10,7 @@ import type { World } from '../lib/build.ts'
 import { readDesign } from '../lib/design.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildDesign, buildNextPr } from '../lib/implement.ts'
-import { realWorkshop } from '../lib/workshop.ts'
+import { realWorkshop, runAfterPush } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import type { RepoRules } from '../lib/repo.ts'
 import { diskStore } from '../lib/store.ts'
@@ -285,7 +285,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       pushedHead = head
       return { number: 7, url: 'https://github.com/owner/app/pull/7' }
     },
-    afterPush: (worktree, command) => {
+    afterPush: async (worktree, command) => {
       steps.push('after push')
       const run = did.afterPushes.push(command)
       options.afterPush?.(worktree, run, () => { head = `after-push-${run}` })
@@ -963,16 +963,32 @@ test('a review fix is replied to only after after-push succeeds on its new head'
   assert.deepEqual(steps.slice(-3), ['after push', 'reply', 're-review'])
 })
 
-test('the after-push command runs in the worktree with the bot token and fails with its last output', { concurrency: false }, () => {
+test('the after-push command runs in the worktree with the bot token and fails with its last output', { concurrency: false }, async () => {
   const { workshop, restore } = workshopWithGitHubResponse(githubResponse())
   const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-after-push-'))
   try {
-    workshop.afterPush(worktree, 'printf "%s" "$GH_TOKEN" > token.txt')
+    await workshop.afterPush(worktree, 'printf "%s" "$GH_TOKEN" > token.txt')
     assert.equal(fs.readFileSync(path.join(worktree, 'token.txt'), 'utf8'), 'token')
-    assert.throws(() => workshop.afterPush(worktree, 'echo first; echo stale evidence >&2; exit 3'), /exit 3[\s\S]*stale evidence/)
+    await assert.rejects(workshop.afterPush(worktree, 'echo first; echo stale evidence >&2; exit 3'), /exit 3[\s\S]*stale evidence/)
   } finally {
     restore()
   }
+})
+
+test('an after-push command that runs past its time limit is stopped along with every process it started', async () => {
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-after-push-'))
+  await assert.rejects(runAfterPush(worktree, 'sleep 300 & echo $! > child.pid; wait', process.env, 300), /ran past .* minutes and was stopped/)
+  const child = Number(fs.readFileSync(path.join(worktree, 'child.pid'), 'utf8'))
+  const running = () => {
+    try {
+      process.kill(child, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  for (let tries = 0; tries < 40 && running(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(running(), false)
 })
 
 const AUTHOR = { GIT_AUTHOR_NAME: 'Owner', GIT_AUTHOR_EMAIL: 'owner@example.com', GIT_COMMITTER_NAME: 'Owner', GIT_COMMITTER_EMAIL: 'owner@example.com' }

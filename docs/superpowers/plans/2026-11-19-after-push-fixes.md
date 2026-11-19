@@ -42,7 +42,7 @@ grace. `Workshop.afterPush` becomes async and calls it with the 30-minute limit.
 **Success Criteria**: after a timeout no process the command started is left running.
 **Tests**: `runAfterPush` with a 300 ms limit on `sleep 300 & echo $! > child.pid; wait` rejects with "ran past …
 and was stopped" and the child pid is gone; the existing bot-token and last-output test, made async.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Excess-audit cleanups
 **Goal**: delete the trailing `if (!synced) continue` in `watchPr` (gone with Stage 1) and the test `with no

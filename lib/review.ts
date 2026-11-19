@@ -85,7 +85,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
       if (afterPushStamp === undefined || (changed !== null && changed !== afterPushStamp)) {
         const command = afterPush.command.replaceAll('{pr}', String(number))
         try {
-          workshop.afterPush(worktree, command)
+          await workshop.afterPush(worktree, command)
         } catch (error) {
           return end('fix failed', [`The after-push command \`${command}\` failed: ${(error as Error).message}`])
         }
