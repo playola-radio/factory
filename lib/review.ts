@@ -3,7 +3,7 @@ import { readDesign } from './design.ts'
 import { designValues, qaRulesBlock, renderPrompt } from './prompts.ts'
 import { fingerprint } from './repo.ts'
 import type { RepoRules } from './repo.ts'
-import type { Claim, PrReport, ReviewReport } from './store.ts'
+import type { Claim, HeldReplies, PrReport, ReviewReport } from './store.ts'
 import type { PlannedPr } from './types.ts'
 import { branchProblems } from './workshop.ts'
 import type { ReviewItem, Workshop } from './workshop.ts'
@@ -25,8 +25,9 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type })
   let review: ReviewReport = { rounds: report.review?.rounds ?? [], answered: report.review?.answered ?? [], problems: [] }
   let afterPushStamp = report.afterPushStamp
+  let held = report.held
   const save = (): PrReport => {
-    const saved = { ...report, review, ...(afterPushStamp === undefined ? {} : { afterPushStamp }) }
+    const saved: PrReport = { ...report, review, afterPushStamp, held }
     world.store.savePrReport(claim.repo, saved)
     return saved
   }
@@ -57,13 +58,12 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     review = { ...review, rounds: [...review.rounds, { ...wave, head, forBots: failedChecks.length > 0 || items.some((item) => !item.fromOwner) }] }
     return labelled.map(({ label, item }) => ({ label, item, reply: wave.replies.find((candidate) => candidate.id === label) }))
   }
-  const post = (answers: Awaited<ReturnType<typeof ask>>, reReview: boolean) => {
-    for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
+  const post = ({ replies, reReview }: HeldReplies) => {
+    for (const { item, body, resolve } of replies) workshop.reply(number, item, body, resolve)
     if (reReview) workshop.requestReview(number)
-    review = { ...review, answered: [...review.answered, ...answers.filter(({ item }) => item.kind === 'comment').map(({ item }) => item.id)] }
+    review = { ...review, answered: [...review.answered, ...replies.filter(({ item }) => item.kind === 'comment').map(({ item }) => item.id)] }
   }
   let toldOwner = false
-  let held: { answers: Awaited<ReturnType<typeof ask>>; reReview: boolean } | undefined
 
   for (;;) {
     const github = workshop.pullRequestState(number)
@@ -98,13 +98,13 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     let justPosted: Set<string> | undefined
     if (held) {
-      justPosted = new Set(held.answers.map(({ item }) => item.id))
-      post(held.answers, held.reReview)
+      justPosted = new Set(held.replies.map(({ item }) => item.id))
+      post(held)
       held = undefined
       save()
       record('review round')
     }
-    const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !held?.answers.some(({ item: heldItem }) => heldItem.id === item.id) && !justPosted?.has(item.id))
+    const unanswered = github.items.filter((item) => !review.answered.includes(item.id) && !held?.replies.some(({ item: heldItem }) => heldItem.id === item.id) && !justPosted?.has(item.id))
     if (github.checks === 'pending') {
       await workshop.wait()
       continue
@@ -148,8 +148,9 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     const pushed = workshop.head(worktree) !== github.head
     if (pushed) workshop.push(worktree, branch)
     const reReview = pushed && github.greptile?.score != null && github.greptile.score < reReviewBelow
-    if (afterPush && pushed) held = { answers: [...(held?.answers ?? []), ...answers], reReview: held?.reReview || reReview }
-    else post(answers, reReview)
+    const replies = answers.map(({ item, reply }) => ({ item, body: reply!.reply, resolve: reply!.action === 'fixed' && !item.fromOwner }))
+    if (afterPush && pushed) held = { replies: [...(held?.replies ?? []), ...replies], reReview: (held?.reReview ?? false) || reReview }
+    else post({ replies, reReview })
     save()
     if (!held) record('review round')
   }

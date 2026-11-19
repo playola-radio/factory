@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import type { PlannedPr } from './types.ts'
+import type { ReviewItem } from './workshop.ts'
 
 export interface Claim {
   repo: string
@@ -91,6 +92,12 @@ export interface ReviewReport {
   problems: string[]
 }
 
+// Replies to a pushed fix, and whether to ask for another review, waiting for the after-push command to succeed on it.
+export interface HeldReplies {
+  replies: { item: ReviewItem; body: string; resolve: boolean }[]
+  reReview: boolean
+}
+
 export interface PrReport {
   state: 'implemented' | 'needs attention'
   number: number
@@ -105,6 +112,7 @@ export interface PrReport {
   review?: ReviewReport
   // The whenChanged fingerprint after the after-push command last succeeded; '' when it has nothing to fingerprint. Absent until it first succeeds.
   afterPushStamp?: string
+  held?: HeldReplies
 }
 
 // The only place that knows where factory state lives, so it can move off this disk later.

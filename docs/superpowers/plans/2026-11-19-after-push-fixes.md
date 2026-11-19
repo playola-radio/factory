@@ -32,7 +32,7 @@ report saved without `held` loads.
 **Tests**: `test/build.test.ts`: after-push fails after a review fix → the report stores the held reply; the next
 build runs the command, posts the reply and the re-review once, no second agent round for that item, and the stored
 `held` is gone. Existing tests already load reports with no `held`.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: A timed-out after-push command stops all its processes
 **Goal**: `runAfterPush(cwd, command, env, timeoutMs)` in `lib/workshop.ts` runs `sh -c` with async `spawn`,

@@ -934,6 +934,24 @@ test('a failed after-push command after a review fix leaves its replies and re-r
   assert.deepEqual([did.pushed, did.reReviews, did.merged, did.afterPushes.length, replies.length], [1, 0, 0, 2, 0])
 })
 
+test('replies held when the after-push command fails are kept in the report and posted exactly once by the next build', async () => {
+  const bot = { items: [BOT_THREAD], greptile: { score: 0 } }
+  const { did, replies, reviewPrompts, build, world } = await buildPr({
+    rules: PUBLISH_CHANGED,
+    whileAnswering: (worktree) => record(worktree, '.qa-artifacts/a/result.json', 'changed'),
+    afterPush: (_worktree, run) => {
+      if (run === 2) throw new Error('publish failed')
+    },
+    github: [bot, bot, bot, { state: 'closed' }],
+  })
+  assert.deepEqual(world.store.prReport(world.repoId, 1)?.held, { replies: [{ item: BOT_THREAD, body: 'reply to R1', resolve: true }], reReview: true })
+  assert.equal(replies.length, 0)
+  assert.equal(reviewState(await build()), 'closed')
+  assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
+  assert.deepEqual([did.reReviews, reviewPrompts.length, did.afterPushes.length], [1, 1, 3])
+  assert.equal(world.store.prReport(world.repoId, 1)?.held, undefined)
+})
+
 test('a review fix is replied to only after after-push succeeds on its new head', async () => {
   const { did, replies, steps } = await buildPr({
     rules: PUBLISH_CHANGED,
