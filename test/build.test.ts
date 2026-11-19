@@ -202,7 +202,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; reReviewBelow?: number } = {}) {
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -276,8 +276,8 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     },
     wait: async () => void (did.waits += 1),
   }
-  const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop, 4)
-  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, 4) }
+  const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4)
+  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop, options.reReviewBelow ?? 4) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -492,6 +492,26 @@ test("a bot's finding is fixed, pushed, answered in its thread, resolved, and re
   assert.equal(reviewState(report), 'merged')
 })
 
+test('a score at the threshold, a missing score, or no Greptile at all never asks for a second review', async () => {
+  for (const greptile of [{ score: 4 }, { score: null }, null]) {
+    const { did } = await buildPr({ github: [{ items: [BOT_THREAD], greptile }, { approved: true }] })
+    assert.deepEqual([did.pushed, did.reReviews], [1, 0])
+  }
+})
+
+test('the threshold comes from the settings, not from a constant', async () => {
+  const github = [{ items: [BOT_THREAD], greptile: { score: 4 } }, { approved: true }]
+  assert.equal((await buildPr({ github, reReviewBelow: 5 })).did.reReviews, 1)
+  assert.equal((await buildPr({ github, reReviewBelow: 3 })).did.reReviews, 0)
+})
+
+test('a human who is not the owner is answered as a reviewer', async () => {
+  const human: ReviewItem = { id: 'T3', kind: 'thread', latest: 'c1', fromOwner: false, where: 'App.swift:1', text: 'a-teammate: please rename this' }
+  const { reviewPrompts, replies } = await buildPr({ github: [{ items: [human] }, { approved: true }] })
+  assert.match(reviewPrompts[0], /\*\*R1\*\* \[reviewer\] `App.swift:1`/)
+  assert.deepEqual(replies, [{ id: 'T3', body: 'reply to R1', resolved: true }])
+})
+
 test('no second review is asked for when the score was four or more', async () => {
   const { did } = await buildPr({ github: [{ items: [BOT_THREAD], greptile: { score: 4 } }, { approved: true }] })
   assert.deepEqual([did.pushed, did.reReviews], [1, 0])
@@ -603,4 +623,43 @@ test('a fix that records nothing new posts no evidence', async () => {
 test("the owner's comment gets an eyes reaction before work on it starts, and a bot's does not", async () => {
   const { steps } = await buildPr({ github: [{ items: [OWNER_THREAD, BOT_THREAD] }, { approved: true }] })
   assert.deepEqual(steps.filter((step) => step.startsWith('eyes')), [`eyes on ${OWNER_THREAD.id}`])
+})
+
+const GREPTILE_COMMENT = (body: string) => ({ comments: { nodes: [{ id: 'g1', databaseId: 1, author: { login: 'greptile-apps' }, body }] } })
+const FAILED_GREPTILE = { commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: [{ name: 'Greptile Review', status: 'COMPLETED', conclusion: 'FAILURE' }] } } } }] } }
+
+function stateWith(overrides: Record<string, unknown>, settings: Settings = SETTINGS) {
+  const { workshop, restore } = workshopWithGitHubResponse(githubResponse(overrides), settings)
+  try {
+    return workshop.pullRequestState(8)
+  } finally {
+    restore()
+  }
+}
+
+test('Greptile in use: its score is read from its last comment, and its failed check is hidden', { concurrency: false }, () => {
+  const state = stateWith({ ...GREPTILE_COMMENT('Confidence Score: 3/5'), ...FAILED_GREPTILE })
+  assert.deepEqual(state.greptile, { score: 3 })
+  assert.deepEqual(state.failedChecks, [])
+})
+
+test('Greptile in use but silent or unreadable: the score is null', { concurrency: false }, () => {
+  assert.deepEqual(stateWith({}).greptile, { score: null })
+  assert.deepEqual(stateWith(GREPTILE_COMMENT('looks fine')).greptile, { score: null })
+})
+
+test('no Greptile in the settings: no score is read and a check named greptile is not hidden', { concurrency: false }, () => {
+  const state = stateWith({ ...GREPTILE_COMMENT('Confidence Score: 3/5'), ...FAILED_GREPTILE }, { ...SETTINGS, greptile: null })
+  assert.equal(state.greptile, null)
+  assert.deepEqual(state.failedChecks, ['Greptile Review'])
+  assert.equal(state.checks, 'failed')
+})
+
+test('logins are matched without regard to case', { concurrency: false }, () => {
+  const state = stateWith({
+    reviews: { nodes: [{ id: 'r1', databaseId: 5, author: { login: 'Owner-Login' }, state: 'APPROVED', body: '', commit: { oid: 'abc' } }] },
+    reviewThreads: { nodes: [{ id: 't1', isResolved: false, path: 'a', line: 1, comments: { nodes: [{ id: 'c1', author: { login: 'OWNER-LOGIN' }, body: 'q' }, { id: 'c2', author: { login: 'Bot-Login' }, body: 'a' }] } }] },
+  })
+  assert.equal(state.approved, true)
+  assert.deepEqual(state.items, [])
 })
