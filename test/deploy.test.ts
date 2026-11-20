@@ -104,6 +104,6 @@ test('a repo path with XML-special characters still renders valid plists', () =>
     const contents = fs.readFileSync(target, 'utf8')
     assert.match(contents, /a &amp; b/, `${label} should XML-escape the ampersand`)
     assert.doesNotMatch(contents, /a & b/, `${label} should not leave a raw ampersand in the XML`)
-    execFileSync('plutil', ['-lint', target]) // throws if the rendered plist is not valid
+    if (process.platform === 'darwin') execFileSync('plutil', ['-lint', target]) // plutil is macOS-only; throws if the rendered plist is not valid
   }
 })
