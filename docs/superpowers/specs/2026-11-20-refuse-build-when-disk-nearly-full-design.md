@@ -95,16 +95,16 @@ environment (`store`, `repoId`, `remoteBranches`, `now`) and is injected in test
 
 ## Revisions after review (Greptile, 3/5)
 
-- **The command writes `build.pid` only once there is work, and takes the lock atomically.** `build.pid` and
-  `baseView` run before the claim-time guard; writing `build.pid` unconditionally meant an empty repo on a full
-  disk would `ENOSPC` on that write and exit non-zero — pausing a repo that had no work, which is exactly the
-  goal this change protects. The lock is now taken lazily, after `startOrResume` confirms a design to build.
-  (`baseView`'s fetch/worktree is kilobytes, not the 45–50 GB a build consumes; the 20 GB floor exists so the
-  volume never reaches the point where even that fails. A full command-level test covers the nothing-to-build
-  exit-0 path.) Because the write is lazy, a second build that resumes another's in-progress claim could reach
-  the lock after the first — so `acquireLock` takes it atomically (`O_EXCL`) and never overwrites a lock a live
-  build still holds, failing instead. This keeps two builds from running agents in the same worktrees and
-  clobbering each other's commits and saved reports; a lock left by a dead process is taken over.
+- **The command takes the build lock atomically, before `baseView`.** `baseView` writes the shared `base`
+  worktree, so the lock has to be held before it — otherwise two builds on one repo can both get past the PID
+  check, and the second can resume the first's claim and run agents in the same worktrees, clobbering each
+  other's commits and saved reports. `acquireLock` creates `build.pid` with `O_EXCL` and never overwrites a lock
+  a live build still holds (it fails with "already running"); a lock left by a dead process is stale and taken
+  over. (An earlier revision wrote the lock lazily, only once work was confirmed, to spare an empty repo a
+  `build.pid` write on a full disk — but that left `baseView` unlocked, so the lock moved back ahead of it. The
+  write is a few bytes; the free-space floor keeps factory builds from ever driving the volume to where even
+  that fails, so a build with nothing to build still exits 0 whenever the disk has any real space. A full
+  command-level test covers the nothing-to-build exit-0 path.)
 - **The post-merge answering of owner questions is not guarded.** The review guard sits before the pre-merge
   review round only. Once a PR is merged, refusing there would strand the owner's questions unanswered (a
   restart finds the merged PR and returns at once) without saving any build work, so that courtesy answer always

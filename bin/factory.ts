@@ -99,21 +99,15 @@ async function main() {
     const base = values.base || world.store.claimFor(world.repoId)?.base || 'develop'
     const buildDir = path.join(HOME, 'worktrees', world.repoId.replaceAll('/', '__'))
     const lock = path.join(buildDir, 'build.pid')
-    const running = fs.existsSync(lock) && Number(fs.readFileSync(lock, 'utf8'))
-    if (running && isAlive(running)) throw new Error(`A factory build is already running on ${world.repoId} (process ${running}).`)
     fs.mkdirSync(buildDir, { recursive: true })
-    // The lock is taken only once there is work, so that a build with nothing to build never writes build.pid —
-    // on a full disk that write would ENOSPC and, as a non-zero exit, pause a repo that had no work. A low-disk
-    // refusal (startOrResume throws before claiming) exits before the lock is taken for the same reason.
-    // acquireLock takes it atomically and never overwrites a lock a live build still holds, so a build that
-    // resumes another's claim cannot end up running agents in the same worktrees as a build already in flight.
-    let locked = false
-    const lockForWork = () => {
-      if (locked) return
-      acquireLock(lock, world.repoId, isAlive)
-      process.on('exit', () => fs.rmSync(lock, { force: true }))
-      locked = true
-    }
+    // Hold the build lock before baseView and everything after it: baseView writes the shared `base` worktree,
+    // so two builds on the same repo must never reach it at once. acquireLock takes build.pid atomically and
+    // refuses to overwrite a lock a live build still holds (a stale one, left by a dead process, is taken over),
+    // so a second build cannot run agents in the same worktrees as one already in flight. A build with nothing
+    // to build still exits 0 whenever the volume has room for this few-byte write; the free-space floor keeps
+    // factory builds from ever driving the volume to the point where even that would fail.
+    acquireLock(lock, world.repoId, isAlive)
+    process.on('exit', () => fs.rmSync(lock, { force: true }))
     for (;;) {
       const report = startOrResume(baseView(repo, buildDir, base), world, base)
       if (report.state !== 'started' && report.state !== 'already in progress') {
@@ -121,7 +115,6 @@ async function main() {
         if (report.state !== 'nothing to build') process.exitCode = 1
         return
       }
-      lockForWork()
       const runDir = path.join(HOME, 'runs', `${path.basename(repo)}-${report.design}-build`)
       console.error(`${report.state}: ${report.design} on ${base}. Agent traces: ${runDir}/traces`)
       const pr = await buildDesign(report.claim.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, values.model || DEFAULT_MODEL.claude))
