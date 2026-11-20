@@ -91,7 +91,7 @@ async function main() {
   }
   if ((command === 'build' || command === 'abandon') && rest.length === 1) {
     const repo = path.resolve(rest[0])
-    const world = realWorld(repo, diskStore(HOME))
+    const world = realWorld(repo, diskStore(HOME), HOME)
     if (command === 'abandon') {
       console.log(JSON.stringify(abandon(world), null, 2))
       return

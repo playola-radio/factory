@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 
-import { branchPrefix } from './build.ts'
+import { branchPrefix, ensureDiskSpace } from './build.ts'
 import type { World } from './build.ts'
 import { readDesign } from './design.ts'
 import { runGate } from './gate.ts'
@@ -68,6 +68,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
     return { state: 'stopped', number: pr.number, reason: `PR ${pr.number} still needs attention after ${attempts} attempts: ${previous.problems.join('; ')}. Its work is in ${previous.worktree}.` }
   }
 
+  ensureDiskSpace(world, claim.design)
   const branch = `${branchPrefix(claim.design)}pr-${pr.number}`
   const worktree = workshop.prepareWorktree(claim.base, branch)
   const merge = previous ? workshop.mergeBase(worktree, claim.base) : null

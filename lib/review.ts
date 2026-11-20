@@ -1,3 +1,4 @@
+import { ensureDiskSpace } from './build.ts'
 import type { World } from './build.ts'
 import { readDesign } from './design.ts'
 import { designValues, renderPrompt } from './prompts.ts'
@@ -34,6 +35,7 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     return save()
   }
   const ask = async (items: ReviewItem[], failedChecks: string[], situation: keyof typeof SITUATION, head: string) => {
+    ensureDiskSpace(world, claim.design)
     for (const item of items) if (item.fromOwner) workshop.acknowledge(item)
     const labelled = items.map((item, index) => ({ label: `R${index + 1}`, item }))
     const wave = await workshop.answerReview(

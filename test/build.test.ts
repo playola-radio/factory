@@ -5,15 +5,22 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { abandon, finish, repoIdFromRemote, startOrResume } from '../lib/build.ts'
+import { abandon, finish, LowDiskError, repoIdFromRemote, startOrResume } from '../lib/build.ts'
 import type { World } from '../lib/build.ts'
 import { readDesign } from '../lib/design.ts'
+import { runGate } from '../lib/gate.ts'
+import { watchPr } from '../lib/review.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildDesign, buildNextPr } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
-import type { Claim, FixWave, Implementation, ReviewWave } from '../lib/store.ts'
+import type { Claim, FixWave, Implementation, PrReport, ReviewWave } from '../lib/store.ts'
+
+const GB = 1024 ** 3
+
+// A workshop that fails any call, to prove a disk-space guard refuses before it reaches any agent step.
+const neverUsed = new Proxy({}, { get: () => () => { throw new Error('the workshop was used despite a full disk') } }) as Workshop
 
 function addDesign(repo: string, name: string, planned: boolean) {
   const dir = path.join(repo, 'factory', 'ready', name)
@@ -37,6 +44,7 @@ function setup(designs: [string, boolean][], branches: string[] = []) {
     repoId: 'owner/app',
     remoteBranches: (prefix) => branches.filter((branch) => branch.startsWith(prefix)),
     now: () => '2026-11-17T00:00:00.000Z',
+    freeSpace: () => Number.POSITIVE_INFINITY,
   }
   const events = () => fs.readFileSync(path.join(home, 'events.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).type)
   return { repo, world, events }
@@ -77,6 +85,20 @@ test('refuses when GitHub already has factory branches for the design', () => {
 
 test('reports nothing to build when factory/ready is empty', () => {
   const { repo, world } = setup([])
+  assert.deepEqual(startOrResume(repo, world, 'develop'), { state: 'nothing to build' })
+})
+
+test('refuses to claim a design when the disk is nearly full', () => {
+  const { repo, world, events } = setup([['001-first', true]])
+  world.freeSpace = () => 2 * GB
+  assert.throws(() => startOrResume(repo, world, 'develop'), LowDiskError)
+  assert.equal(world.store.claimFor('owner/app'), null)
+  assert.deepEqual(events(), ['build refused for space'])
+})
+
+test('a full disk does not stop a build that has nothing to build', () => {
+  const { repo, world } = setup([])
+  world.freeSpace = () => 1 * GB
   assert.deepEqual(startOrResume(repo, world, 'develop'), { state: 'nothing to build' })
 })
 
@@ -600,4 +622,40 @@ test('a fix that records nothing new posts no evidence', async () => {
 test("the owner's comment gets an eyes reaction before work on it starts, and a bot's does not", async () => {
   const { steps } = await buildPr({ github: [{ items: [OWNER_THREAD, BOT_THREAD] }, { approved: true }] })
   assert.deepEqual(steps.filter((step) => step.startsWith('eyes')), [`eyes on ${OWNER_THREAD.id}`])
+})
+
+test('refuses before implementing a PR when the disk is nearly full', async () => {
+  const { repo, world, events } = setup([['001-first', true]])
+  const started = startOrResume(repo, world, 'develop')
+  if (started.state !== 'started') throw new Error('not started')
+  world.freeSpace = () => 2 * GB
+  await assert.rejects(buildNextPr(started.claim.prs, started.claim, world, neverUsed), LowDiskError)
+  assert.deepEqual(events(), ['design claimed', 'build refused for space'])
+})
+
+test('refuses before a gate round when the disk is nearly full', async () => {
+  const { repo, world, events } = setup([['001-first', true]])
+  const started = startOrResume(repo, world, 'develop')
+  if (started.state !== 'started') throw new Error('not started')
+  world.freeSpace = () => 2 * GB
+  const report = { state: 'implemented', number: 1, attempts: 1, branch: 'factory/001-first/pr-1', worktree: repo, commits: [], problems: [], implementation: DONE } as PrReport
+  await assert.rejects(runGate(started.claim.prs[0], started.claim, report, world, neverUsed), LowDiskError)
+  assert.deepEqual(events(), ['design claimed', 'gate started', 'build refused for space'])
+})
+
+test('refuses before a review round when the disk is nearly full', async () => {
+  const { repo, world, events } = setup([['001-first', true]])
+  const started = startOrResume(repo, world, 'develop')
+  if (started.state !== 'started') throw new Error('not started')
+  world.freeSpace = () => 2 * GB
+  let answered = false
+  const workshop = {
+    pullRequestState: () => ({ state: 'open', head: 'abc', approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptileScore: null, items: [{ id: 'c1', kind: 'comment', latest: 'c1', fromOwner: false, text: 'please change' }] }),
+    evidenceStamp: () => 'same',
+    answerReview: async () => { answered = true; return { summary: '', replies: [], checks: [], blockers: [] } },
+  } as unknown as Workshop
+  const report = { state: 'implemented', number: 1, attempts: 1, branch: 'factory/001-first/pr-1', worktree: repo, commits: [], problems: [], implementation: DONE, pullRequest: { number: 7, url: 'https://example/7' } } as PrReport
+  await assert.rejects(watchPr(started.claim.prs[0], started.claim, report, world, workshop), LowDiskError)
+  assert.equal(answered, false)
+  assert.deepEqual(events(), ['design claimed', 'build refused for space'])
 })

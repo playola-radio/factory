@@ -1,4 +1,5 @@
 import { NO_DELEGATION } from './agents.ts'
+import { ensureDiskSpace } from './build.ts'
 import type { World } from './build.ts'
 import { readDesign } from './design.ts'
 import { designValues, renderPrompt } from './prompts.ts'
@@ -44,6 +45,7 @@ export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, wor
 
   let auditExcess = true
   for (let round = 1; round <= MAX_ROUNDS; round++) {
+    ensureDiskSpace(world, claim.design)
     const step = `gate-pr-${pr.number}-round-${round}`
     const [broken, excess] = await Promise.all([
       twice(() => workshop.breakIt(worktree, renderPrompt('gate-break', values), `${step}-break-it`)),
