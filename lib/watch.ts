@@ -110,15 +110,32 @@ export function realIsGitClone(repoPath: string): boolean {
   }
 }
 
+// Runs a command in its own process group (`detached`), so stop() can signal the whole tree — a `factory build`
+// launches `claude`/`codex` as its own children and does not forward signals, so killing only the build's node
+// process would orphan the agent and let it keep editing the worktree while the next build resumes it.
+export function spawnTree(command: string, args: string[]): BuildHandle {
+  const child = spawn(command, args, { stdio: 'inherit', env: process.env, detached: true })
+  const done = new Promise<number>((resolve) => {
+    child.on('close', (code) => resolve(code ?? 1))
+    child.on('error', () => resolve(1))
+  })
+  return {
+    done,
+    stop: () => {
+      if (child.pid === undefined) return
+      try {
+        process.kill(-child.pid, 'SIGTERM')
+      } catch {
+        // Already gone, or we never became a group leader; nothing to stop.
+      }
+    },
+  }
+}
+
 export function realWatchEffects(binPath: string): WatchEffects {
   return {
     startBuild(repo) {
-      const child = spawn(process.execPath, [binPath, 'build', repo.path, '--base', repo.base], { stdio: 'inherit', env: process.env })
-      const done = new Promise<number>((resolve) => {
-        child.on('close', (code) => resolve(code ?? 1))
-        child.on('error', () => resolve(1))
-      })
-      return { done, stop: () => child.kill('SIGTERM') }
+      return spawnTree(process.execPath, [binPath, 'build', repo.path, '--base', repo.base])
     },
     sleep: (ms, signal) =>
       new Promise((resolve) => {

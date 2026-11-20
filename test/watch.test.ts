@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { loadWatchConfig, realWatchEffects, watch } from '../lib/watch.ts'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+import { loadWatchConfig, realWatchEffects, spawnTree, watch } from '../lib/watch.ts'
 import type { BuildHandle, RepoConfig, WatchEffects } from '../lib/watch.ts'
 
 const anyGit = () => true
@@ -148,6 +152,34 @@ test('waits for a stopped child to exit before returning', async () => {
   })
   // watch() only returns after awaiting every child's done; the child here resolves on a later tick.
   assert.equal(doneResolved, true)
+})
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+test('stopping a build kills the agents it spawned, not just its own process', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-tree-'))
+  const pidFile = path.join(dir, 'grandchild.pid')
+  // The "build" spawns a "claude" that records its pid and lingers. Only a process-group kill reaches it.
+  fs.writeFileSync(path.join(dir, 'grandchild.js'), `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000)`)
+  fs.writeFileSync(path.join(dir, 'build.js'), `require('child_process').spawn(process.execPath, [${JSON.stringify(path.join(dir, 'grandchild.js'))}], { stdio: 'ignore' }); setInterval(() => {}, 1000)`)
+
+  const handle = spawnTree(process.execPath, [path.join(dir, 'build.js')])
+  for (let i = 0; i < 200 && !fs.existsSync(pidFile); i++) await delay(10)
+  const grandchild = Number(fs.readFileSync(pidFile, 'utf8'))
+  assert.equal(alive(grandchild), true, 'the agent should be running before we stop')
+
+  handle.stop()
+  await handle.done
+  for (let i = 0; i < 100 && alive(grandchild); i++) await delay(10)
+  assert.equal(alive(grandchild), false, 'the agent must be killed when the build is stopped')
 })
 
 test('a sleep is cut short when its signal aborts', async () => {
