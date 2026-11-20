@@ -20,6 +20,7 @@ export interface FactoryEvent {
     | 'design claimed'
     | 'design abandoned'
     | 'design finished'
+    | 'build refused for space'
     | 'pr started'
     | 'pr implemented'
     | 'pr needs attention'

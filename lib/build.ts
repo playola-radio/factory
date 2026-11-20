@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 
 import { readDesign } from './design.ts'
@@ -11,6 +13,50 @@ export interface World {
   repoId: string
   remoteBranches(prefix: string): string[]
   now(): string
+  // Bytes free on the volume holding the factory home. Injected so builds can refuse before a step runs out.
+  freeSpace(): number
+}
+
+const GB = 1024 ** 3
+const DEFAULT_MIN_FREE_GB = 20
+
+// The least free space a build will start a step with, from FACTORY_MIN_FREE_GB (binary GB), default 20 GB.
+export function minFreeBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.FACTORY_MIN_FREE_GB
+  const gb = raw === undefined || raw.trim() === '' ? DEFAULT_MIN_FREE_GB : Number(raw)
+  if (!Number.isFinite(gb) || gb < 0) {
+    throw new Error(`FACTORY_MIN_FREE_GB must be a non-negative number of gigabytes, not ${JSON.stringify(raw)}.`)
+  }
+  return gb * GB
+}
+
+const asGb = (bytes: number) => `${(bytes / GB).toFixed(1)} GB`
+
+export class LowDiskError extends Error {
+  readonly free: number
+  readonly needed: number
+  constructor(free: number, needed: number) {
+    super(`Not enough disk space to build: ${asGb(free)} free on the factory volume, ${asGb(needed)} needed. Free up space, then restart the build.`)
+    this.name = 'LowDiskError'
+    this.free = free
+    this.needed = needed
+  }
+}
+
+// Refuses, recording the refusal, when free space on the factory volume is below the floor. Called before the
+// build claims a design and before each agent step, so a step never starts only to crash with ENOSPC partway.
+export function ensureDiskSpace(world: World, design: string, env: NodeJS.ProcessEnv = process.env): void {
+  const free = world.freeSpace()
+  const needed = minFreeBytes(env)
+  if (free >= needed) return
+  // Best effort: the refusal message and exit code matter more than the event, and the volume that is too full
+  // to build may also be too full to append to events.jsonl.
+  try {
+    world.store.record({ at: world.now(), repo: world.repoId, design, type: 'build refused for space' })
+  } catch {
+    // The disk is full enough that even the event cannot be written; still refuse with the clear message.
+  }
+  throw new LowDiskError(free, needed)
 }
 
 export type BuildReport =
@@ -44,6 +90,7 @@ export function startOrResume(repo: string, world: World, base: string): BuildRe
     }
   }
 
+  ensureDiskSpace(world, next.design)
   const claim: Claim = { repo: world.repoId, design: next.design, base, startedAt: world.now(), prs: prsOf(next.design) }
   world.store.claim(claim)
   world.store.record({ at: claim.startedAt, repo: claim.repo, design: claim.design, type: 'design claimed' })
@@ -67,13 +114,45 @@ export function finish(world: World): void {
 
 const git = (repo: string, ...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()
 
+// Takes the per-repo build lock atomically: creates build.pid with O_EXCL so it never overwrites a lock a live
+// build still holds (that build and this one would otherwise run agents in the same worktrees and clobber each
+// other). A lock left by a dead process is stale and gets taken over. Throws if another build is alive.
+export function acquireLock(lockPath: string, repoId: string, isAlive: (pid: number) => boolean): void {
+  for (;;) {
+    try {
+      fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' })
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      const other = Number(fs.readFileSync(lockPath, 'utf8'))
+      if (other && other !== process.pid && isAlive(other)) {
+        throw new Error(`A factory build is already running on ${repoId} (process ${other}).`)
+      }
+      fs.rmSync(lockPath, { force: true })
+    }
+  }
+}
+
 export function repoIdFromRemote(url: string): string {
   const match = url.match(/[:/]([^/:]+\/[^/]+?)(\.git)?$/)
   if (!match) throw new Error(`Cannot tell which repository this is from its origin address: ${url}`)
   return match[1]
 }
 
-export function realWorld(repo: string, store: Store): World {
+// Free space on the volume holding `target`, walking up to the nearest existing ancestor so a home that does
+// not exist yet (a first run) still reports the right volume.
+export function freeSpaceOn(target: string): number {
+  let dir = target
+  while (!fs.existsSync(dir)) {
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  const { bavail, bsize } = fs.statfsSync(dir)
+  return bavail * bsize
+}
+
+export function realWorld(repo: string, store: Store, home: string): World {
   return {
     store,
     repoId: repoIdFromRemote(git(repo, 'remote', 'get-url', 'origin')),
@@ -83,5 +162,6 @@ export function realWorld(repo: string, store: Store): World {
         .filter(Boolean)
         .map((line) => line.split('\t')[1].replace('refs/heads/', '')),
     now: () => new Date().toISOString(),
+    freeSpace: () => freeSpaceOn(home),
   }
 }

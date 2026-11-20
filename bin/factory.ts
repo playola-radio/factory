@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util'
 import { DEFAULT_MODEL, NO_DELEGATION, OTHER_VENDOR, runAgent } from '../lib/agents.ts'
 import { readDesign } from '../lib/design.ts'
 import { finalizePlan } from '../lib/finalize.ts'
-import { abandon, finish, realWorld, startOrResume } from '../lib/build.ts'
+import { abandon, acquireLock, finish, realWorld, startOrResume } from '../lib/build.ts'
 import { buildDesign } from '../lib/implement.ts'
 import { diskStore } from '../lib/store.ts'
 import { loadWatchConfig, realIsGitClone, realWatchEffects, watch } from '../lib/watch.ts'
@@ -91,7 +91,7 @@ async function main() {
   }
   if ((command === 'build' || command === 'abandon') && rest.length === 1) {
     const repo = path.resolve(rest[0])
-    const world = realWorld(repo, diskStore(HOME))
+    const world = realWorld(repo, diskStore(HOME), HOME)
     if (command === 'abandon') {
       console.log(JSON.stringify(abandon(world), null, 2))
       return
@@ -99,10 +99,14 @@ async function main() {
     const base = values.base || world.store.claimFor(world.repoId)?.base || 'develop'
     const buildDir = path.join(HOME, 'worktrees', world.repoId.replaceAll('/', '__'))
     const lock = path.join(buildDir, 'build.pid')
-    const running = fs.existsSync(lock) && Number(fs.readFileSync(lock, 'utf8'))
-    if (running && isAlive(running)) throw new Error(`A factory build is already running on ${world.repoId} (process ${running}).`)
     fs.mkdirSync(buildDir, { recursive: true })
-    fs.writeFileSync(lock, String(process.pid))
+    // Hold the build lock before baseView and everything after it: baseView writes the shared `base` worktree,
+    // so two builds on the same repo must never reach it at once. acquireLock takes build.pid atomically and
+    // refuses to overwrite a lock a live build still holds (a stale one, left by a dead process, is taken over),
+    // so a second build cannot run agents in the same worktrees as one already in flight. A build with nothing
+    // to build still exits 0 whenever the volume has room for this few-byte write; the free-space floor keeps
+    // factory builds from ever driving the volume to the point where even that would fail.
+    acquireLock(lock, world.repoId, isAlive)
     process.on('exit', () => fs.rmSync(lock, { force: true }))
     for (;;) {
       const report = startOrResume(baseView(repo, buildDir, base), world, base)
