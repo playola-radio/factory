@@ -94,6 +94,9 @@ async function main() {
     const repo = path.resolve(rest[0])
     const world = realWorld(repo, diskStore(HOME))
     const worktreesDir = path.join(HOME, 'worktrees', world.repoId.replaceAll('/', '__'))
+    const lock = path.join(worktreesDir, 'build.pid')
+    const running = fs.existsSync(lock) && Number(fs.readFileSync(lock, 'utf8'))
+    if (running && isAlive(running)) throw new Error(`A factory build is already running on ${world.repoId} (process ${running}); stop it before ${command === 'abandon' ? 'abandoning' : 'starting another build'}.`)
     if (command === 'abandon') {
       const claim = world.store.claimFor(world.repoId)
       const report = abandon(world)
@@ -102,9 +105,6 @@ async function main() {
       return
     }
     const base = values.base || world.store.claimFor(world.repoId)?.base || 'develop'
-    const lock = path.join(worktreesDir, 'build.pid')
-    const running = fs.existsSync(lock) && Number(fs.readFileSync(lock, 'utf8'))
-    if (running && isAlive(running)) throw new Error(`A factory build is already running on ${world.repoId} (process ${running}).`)
     fs.mkdirSync(worktreesDir, { recursive: true })
     fs.writeFileSync(lock, String(process.pid))
     process.on('exit', () => fs.rmSync(lock, { force: true }))

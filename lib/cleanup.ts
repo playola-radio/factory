@@ -63,11 +63,14 @@ function listWorktrees(repo: string): WorktreeEntry[] {
 // Removes every worktree of a design when it is abandoned, keeping any that still hold unpushed commits.
 export function removeDesignWorktrees(repo: string, worktreesDir: string, design: string, base: string): { removed: string[]; kept: string[] } {
   const prefix = `factory/${design}/`
-  const home = fs.realpathSync(worktreesDir)
+  // Git lists worktrees by their canonical path, so match against the canonical worktrees dir and require a real
+  // directory boundary (not a bare string prefix, which would also match a sibling like `<dir>-backup`). Don't
+  // realpath the worktree itself — the folder may have been deleted by hand, and git still lists its branch.
+  const home = fs.existsSync(worktreesDir) ? fs.realpathSync(worktreesDir) : worktreesDir
   const removed: string[] = []
   const kept: string[] = []
   for (const { worktree, branch } of listWorktrees(repo)) {
-    if (!branch.startsWith(prefix) || !fs.realpathSync(worktree).startsWith(home)) continue
+    if (!branch.startsWith(prefix) || !worktree.startsWith(home + path.sep)) continue
     ;(removeWorktree(repo, worktreesDir, worktree, branch, base) ? removed : kept).push(branch)
   }
   return { removed, kept }

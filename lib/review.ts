@@ -58,7 +58,12 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
 
   for (;;) {
     const github = workshop.pullRequestState(number)
-    if (github.state !== 'open') return end(github.state)
+    if (github.state !== 'open') {
+      // Merged already (the owner merged on GitHub, or a run resumed after merging but before cleanup): still reclaim
+      // the worktree. A closed-without-merging PR is left for the owner to look at.
+      if (github.state === 'merged') workshop.discardWorktree(worktree, branch, claim.base)
+      return end(github.state)
+    }
     if (github.checks === 'pending') {
       await workshop.wait()
       continue

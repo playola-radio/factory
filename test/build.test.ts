@@ -471,6 +471,11 @@ test('a PR closed without merging leaves its worktree alone', async () => {
   assert.equal(did.discarded, null)
 })
 
+test('a PR already merged on GitHub still has its worktree discarded', async () => {
+  const { repo, did } = await buildPr({ github: [{ state: 'merged' }] })
+  assert.deepEqual(did.discarded, { worktree: repo, branch: 'factory/001-first/pr-1', base: 'feature/x' })
+})
+
 test("a merged PR's worktree is discarded only after the owner's open question is answered", async () => {
   const { steps } = await buildPr({ github: [{ approved: true, items: [OWNER_THREAD] }], answerAction: 'answered' })
   assert.ok(steps.indexOf(`eyes on ${OWNER_THREAD.id}`) < steps.indexOf('discarded'))

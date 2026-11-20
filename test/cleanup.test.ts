@@ -101,6 +101,33 @@ test("removes the design's pushed worktrees but keeps an unpushed one and the ba
   assert.equal(fs.existsSync(base), true)
 })
 
+test('leaves a worktree in a sibling dir that only shares a name prefix with the worktrees dir', () => {
+  const { repo, worktreesDir } = makeRepo()
+  const sibling = path.join(path.dirname(worktreesDir), `${path.basename(worktreesDir)}-backup`)
+  fs.mkdirSync(sibling, { recursive: true })
+  const outside = path.join(sibling, 'factory__001-x__pr-9')
+  git(repo, 'worktree', 'add', '-b', 'factory/001-x/pr-9', outside, 'origin/main')
+  git(outside, 'push', '-u', 'origin', 'factory/001-x/pr-9')
+
+  const result = removeDesignWorktrees(repo, worktreesDir, '001-x', 'main')
+
+  assert.deepEqual(result, { removed: [], kept: [] })
+  assert.equal(fs.existsSync(outside), true)
+})
+
+test('keeps cleaning the other worktrees when one folder was deleted by hand', () => {
+  const { repo, worktreesDir } = makeRepo()
+  const pr1 = addWorktree(repo, worktreesDir, 'factory/001-x/pr-1')
+  const pr2 = addWorktree(repo, worktreesDir, 'factory/001-x/pr-2')
+  fs.rmSync(pr1, { recursive: true, force: true })
+
+  const result = removeDesignWorktrees(repo, worktreesDir, '001-x', 'main')
+
+  assert.deepEqual(result.removed.sort(), ['factory/001-x/pr-1', 'factory/001-x/pr-2'])
+  assert.equal(fs.existsSync(pr2), false)
+  assert.doesNotMatch(git(repo, 'branch', '--list', 'factory/001-x/pr-2'), /factory/)
+})
+
 test('scratchDir is a per-worktree folder under the worktrees dir, outside the worktree itself', () => {
   const worktreesDir = '/home/.factory/worktrees/owner__app'
   const worktree = path.join(worktreesDir, 'factory__001-x__pr-1')
