@@ -37,6 +37,16 @@ test('plenty of free space passes the check without recording anything', () => {
   assert.deepEqual(events, [])
 })
 
+test('a full disk that cannot even record the event still throws the free-space message', () => {
+  const world = {
+    repoId: 'owner/app',
+    now: () => '2026-11-20T00:00:00.000Z',
+    freeSpace: () => 1 * GB,
+    store: { record: () => { throw new Error("ENOSPC: no space left on device, open 'events.jsonl'") } },
+  } as unknown as World
+  assert.throws(() => ensureDiskSpace(world, '001-first', {}), LowDiskError)
+})
+
 test('too little free space throws LowDiskError and records a refusal event', () => {
   const { world, events } = worldWithFreeSpace(3 * GB)
   assert.throws(

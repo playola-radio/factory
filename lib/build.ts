@@ -49,7 +49,13 @@ export function ensureDiskSpace(world: World, design: string, env: NodeJS.Proces
   const free = world.freeSpace()
   const needed = minFreeBytes(env)
   if (free >= needed) return
-  world.store.record({ at: world.now(), repo: world.repoId, design, type: 'build refused for space' })
+  // Best effort: the refusal message and exit code matter more than the event, and the volume that is too full
+  // to build may also be too full to append to events.jsonl.
+  try {
+    world.store.record({ at: world.now(), repo: world.repoId, design, type: 'build refused for space' })
+  } catch {
+    // The disk is full enough that even the event cannot be written; still refuse with the clear message.
+  }
   throw new LowDiskError(free, needed)
 }
 

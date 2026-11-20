@@ -102,8 +102,16 @@ async function main() {
     const running = fs.existsSync(lock) && Number(fs.readFileSync(lock, 'utf8'))
     if (running && isAlive(running)) throw new Error(`A factory build is already running on ${world.repoId} (process ${running}).`)
     fs.mkdirSync(buildDir, { recursive: true })
-    fs.writeFileSync(lock, String(process.pid))
-    process.on('exit', () => fs.rmSync(lock, { force: true }))
+    // The lock is written only once there is work, so that a build with nothing to build never writes build.pid
+    // — on a full disk that write would ENOSPC and, as a non-zero exit, pause a repo that had no work. A
+    // low-disk refusal (startOrResume throws before claiming) exits before the lock is written for the same reason.
+    let locked = false
+    const lockForWork = () => {
+      if (locked) return
+      fs.writeFileSync(lock, String(process.pid))
+      process.on('exit', () => fs.rmSync(lock, { force: true }))
+      locked = true
+    }
     for (;;) {
       const report = startOrResume(baseView(repo, buildDir, base), world, base)
       if (report.state !== 'started' && report.state !== 'already in progress') {
@@ -111,6 +119,7 @@ async function main() {
         if (report.state !== 'nothing to build') process.exitCode = 1
         return
       }
+      lockForWork()
       const runDir = path.join(HOME, 'runs', `${path.basename(repo)}-${report.design}-build`)
       console.error(`${report.state}: ${report.design} on ${base}. Agent traces: ${runDir}/traces`)
       const pr = await buildDesign(report.claim.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, values.model || DEFAULT_MODEL.claude))

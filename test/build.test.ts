@@ -22,6 +22,16 @@ const GB = 1024 ** 3
 // A workshop that fails any call, to prove a disk-space guard refuses before it reaches any agent step.
 const neverUsed = new Proxy({}, { get: () => () => { throw new Error('the workshop was used despite a full disk') } }) as Workshop
 
+// Pins the free-space floor for a test so an inherited FACTORY_MIN_FREE_GB cannot change its result.
+function pinFloor(t: import('node:test').TestContext, gb: string) {
+  const previous = process.env.FACTORY_MIN_FREE_GB
+  process.env.FACTORY_MIN_FREE_GB = gb
+  t.after(() => {
+    if (previous === undefined) delete process.env.FACTORY_MIN_FREE_GB
+    else process.env.FACTORY_MIN_FREE_GB = previous
+  })
+}
+
 function addDesign(repo: string, name: string, planned: boolean) {
   const dir = path.join(repo, 'factory', 'ready', name)
   fs.mkdirSync(path.join(dir, 'screenshots'), { recursive: true })
@@ -88,7 +98,8 @@ test('reports nothing to build when factory/ready is empty', () => {
   assert.deepEqual(startOrResume(repo, world, 'develop'), { state: 'nothing to build' })
 })
 
-test('refuses to claim a design when the disk is nearly full', () => {
+test('refuses to claim a design when the disk is nearly full', (t) => {
+  pinFloor(t, '20')
   const { repo, world, events } = setup([['001-first', true]])
   world.freeSpace = () => 2 * GB
   assert.throws(() => startOrResume(repo, world, 'develop'), LowDiskError)
@@ -624,7 +635,8 @@ test("the owner's comment gets an eyes reaction before work on it starts, and a 
   assert.deepEqual(steps.filter((step) => step.startsWith('eyes')), [`eyes on ${OWNER_THREAD.id}`])
 })
 
-test('refuses before implementing a PR when the disk is nearly full', async () => {
+test('refuses before implementing a PR when the disk is nearly full', async (t) => {
+  pinFloor(t, '20')
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'develop')
   if (started.state !== 'started') throw new Error('not started')
@@ -633,7 +645,8 @@ test('refuses before implementing a PR when the disk is nearly full', async () =
   assert.deepEqual(events(), ['design claimed', 'build refused for space'])
 })
 
-test('refuses before a gate round when the disk is nearly full', async () => {
+test('refuses before a gate round when the disk is nearly full', async (t) => {
+  pinFloor(t, '20')
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'develop')
   if (started.state !== 'started') throw new Error('not started')
@@ -643,7 +656,8 @@ test('refuses before a gate round when the disk is nearly full', async () => {
   assert.deepEqual(events(), ['design claimed', 'gate started', 'build refused for space'])
 })
 
-test('refuses before a review round when the disk is nearly full', async () => {
+test('refuses before a review round when the disk is nearly full', async (t) => {
+  pinFloor(t, '20')
   const { repo, world, events } = setup([['001-first', true]])
   const started = startOrResume(repo, world, 'develop')
   if (started.state !== 'started') throw new Error('not started')
@@ -658,4 +672,47 @@ test('refuses before a review round when the disk is nearly full', async () => {
   await assert.rejects(watchPr(started.claim.prs[0], started.claim, report, world, workshop), LowDiskError)
   assert.equal(answered, false)
   assert.deepEqual(events(), ['design claimed', 'build refused for space'])
+})
+
+test('a nearly full disk does not stop an approved PR from merging and answering its owner questions', async (t) => {
+  pinFloor(t, '20')
+  const { repo, world } = setup([['001-first', true]])
+  const started = startOrResume(repo, world, 'develop')
+  if (started.state !== 'started') throw new Error('not started')
+  world.freeSpace = () => 2 * GB
+  let merged = false
+  let answered = false
+  const workshop = {
+    pullRequestState: () => ({ state: 'open', head: 'abc', approved: true, conflicts: false, checks: 'passed', failedChecks: [], greptileScore: null, items: [{ id: 'q1', kind: 'comment', latest: 'q1', fromOwner: true, text: 'why this way?' }] }),
+    acknowledge: () => {},
+    merge: () => { merged = true },
+    answerReview: async () => { answered = true; return { summary: '', replies: [{ id: 'R1', action: 'answered' as const, reply: 'because' }], checks: [], blockers: [] } },
+    reply: () => {},
+    evidenceStamp: () => 'same',
+  } as unknown as Workshop
+  const report = { state: 'implemented', number: 1, attempts: 1, branch: 'factory/001-first/pr-1', worktree: repo, commits: [], problems: [], implementation: DONE, pullRequest: { number: 7, url: 'https://example/7' } } as PrReport
+  const result = await watchPr(started.claim.prs[0], started.claim, report, world, workshop)
+  assert.equal(result.review?.state, 'merged')
+  assert.deepEqual([merged, answered], [true, true])
+})
+
+test('the build command runs the whole startup path and exits 0 when there is nothing to build', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cli-'))
+  const origin = path.join(tmp, 'owner', 'app.git')
+  fs.mkdirSync(origin, { recursive: true })
+  execFileSync('git', ['init', '--bare', origin])
+  const clone = path.join(tmp, 'clone')
+  execFileSync('git', ['clone', origin, clone])
+  const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@example', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@example' }
+  fs.writeFileSync(path.join(clone, 'README.md'), 'hi')
+  execFileSync('git', ['-C', clone, 'checkout', '-b', 'develop'])
+  execFileSync('git', ['-C', clone, 'add', '-A'])
+  execFileSync('git', ['-C', clone, 'commit', '-m', 'init'], { env: gitEnv })
+  execFileSync('git', ['-C', clone, 'push', '-u', 'origin', 'develop'])
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-'))
+  const bin = path.resolve(import.meta.dirname, '..', 'bin', 'factory.ts')
+  // execFileSync throws unless the command exits 0, so a clean return is the exit-0 assertion.
+  const out = execFileSync('node', [bin, 'build', clone, '--base', 'develop'], { encoding: 'utf8', env: { ...process.env, FACTORY_HOME: home } })
+  assert.match(out, /nothing to build/)
+  assert.equal(fs.existsSync(path.join(home, 'worktrees', 'owner__app', 'build.pid')), false)
 })

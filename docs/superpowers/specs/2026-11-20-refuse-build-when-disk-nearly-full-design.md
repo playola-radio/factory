@@ -92,3 +92,18 @@ environment (`store`, `repoId`, `remoteBranches`, `now`) and is injected in test
 - Guard throws (exits 1 via the existing top-level catch) rather than returning a `refused` report, so the
   message is plain and the agent steps are covered, not just the claim.
 - One guard per gate round and per review round (not per sub-pass); "round" is the unit the spec names.
+
+## Revisions after review (Greptile, 3/5)
+
+- **The command writes `build.pid` only once there is work.** `build.pid` and `baseView` run before the
+  claim-time guard; writing `build.pid` unconditionally meant an empty repo on a full disk would `ENOSPC` on
+  that write and exit non-zero — pausing a repo that had no work, which is exactly the goal this change
+  protects. The lock is now acquired lazily, after `startOrResume` confirms a design to build. (`baseView`'s
+  fetch/worktree is kilobytes, not the 45–50 GB a build consumes; the 20 GB floor exists so the volume never
+  reaches the point where even that fails. A full command-level test covers the nothing-to-build exit-0 path.)
+- **The post-merge answering of owner questions is not guarded.** The review guard sits before the pre-merge
+  review round only. Once a PR is merged, refusing there would strand the owner's questions unanswered (a
+  restart finds the merged PR and returns at once) without saving any build work, so that courtesy answer always
+  runs.
+- **Recording the refusal event is best effort.** If the volume is too full to append to `events.jsonl`, the
+  refusal still throws the clear free-space message rather than a raw write error.
