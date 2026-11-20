@@ -21,4 +21,4 @@ You are fixing what two reviewers found in one pull request before it is opened.
 
 **Not yours:** do not push, open a pull request, call Codex, or edit anything under `factory/`.
 
-Return: a `summary` of what changed; `dispositions`, one for every finding id above (`fixed` covers a deletion; `declined` needs the reason); `checks` (each command you ran last and whether it passed); and `blockers` (anything you could not finish, with exactly what you tried; empty otherwise).
+Return: a `summary` of what changed; `dispositions`, one for every finding id above (`fixed` covers a deletion; `declined` needs the reason); `checks` (each command that has to pass and that you ran last, and whether it did. Leave out anything you ran expecting it to fail, such as breaking the code on purpose to prove a test catches it; describe that in `summary` instead. One `passed: false` here stops the build); and `blockers` (anything you could not finish, with exactly what you tried; empty otherwise).

@@ -17,4 +17,4 @@ You are implementing one pull request of an approved design. Nobody is watching:
 
 If a step needs something you do not have (a login, a device, a secret), finish everything else, commit it, and list that step under `blockers`. If the plan cannot be built as written, stop and say exactly why under `blockers`.
 
-Return: `status` (`done` only when every change and test in the section is committed and every check passes, else `blocked`), a `summary` of what you built and anything the reviewer should look at, `checks` (each command you ran last and whether it passed), and `blockers` (empty when done).
+Return: `status` (`done` only when every change and test in the section is committed and every check passes, else `blocked`), a `summary` of what you built and anything the reviewer should look at, `checks` (each command that has to pass and that you ran last, and whether it did. Leave out anything you ran expecting it to fail, such as breaking the code on purpose to prove a test catches it; describe that in `summary` instead. One `passed: false` here stops the build), and `blockers` (empty when done).
