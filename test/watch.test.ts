@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { loadWatchConfig, watch } from '../lib/watch.ts'
+import { loadWatchConfig, realWatchEffects, watch } from '../lib/watch.ts'
 import type { BuildHandle, RepoConfig, WatchEffects } from '../lib/watch.ts'
 
 const anyGit = () => true
@@ -68,6 +68,14 @@ function runsUntilStopped(onStop?: () => void): BuildHandle {
   return { done, stop: () => { onStop?.(); resolve(143) } }
 }
 
+// Like runsUntilStopped, but done resolves on a later tick after stop() — modelling a real child that takes a
+// moment to exit, so a watcher that forgot to await it would return too early.
+function runsUntilStoppedAsync(onResolved: () => void): BuildHandle {
+  let resolve!: (code: number) => void
+  const done = new Promise<number>((r) => { resolve = r })
+  return { done, stop: () => setTimeout(() => { onResolved(); resolve(143) }, 5) }
+}
+
 // Drives `watch` for `passes` sleeps, then stops. `startBuild` is the fake under test.
 async function drive(opts: { repos: RepoConfig[]; startBuild: WatchEffects['startBuild']; passes: number }) {
   let stopResolve!: () => void
@@ -77,7 +85,7 @@ async function drive(opts: { repos: RepoConfig[]; startBuild: WatchEffects['star
   const effects: WatchEffects = {
     startBuild: opts.startBuild,
     log: (message) => logs.push(message),
-    sleep: () => {
+    sleep: (_ms: number, _signal: AbortSignal) => {
       passCount += 1
       if (passCount >= opts.passes) {
         stopResolve()
@@ -129,6 +137,27 @@ test('stops running children on shutdown', async () => {
     passes: 1,
   })
   assert.equal(stopped, true)
+})
+
+test('waits for a stopped child to exit before returning', async () => {
+  let doneResolved = false
+  await drive({
+    repos: [{ path: '/a', base: 'develop' }],
+    startBuild: () => runsUntilStoppedAsync(() => { doneResolved = true }),
+    passes: 1,
+  })
+  // watch() only returns after awaiting every child's done; the child here resolves on a later tick.
+  assert.equal(doneResolved, true)
+})
+
+test('a sleep is cut short when its signal aborts', async () => {
+  const effects = realWatchEffects('/does/not/matter')
+  const controller = new AbortController()
+  const started = Date.now()
+  const sleeping = effects.sleep(60_000, controller.signal)
+  controller.abort()
+  await sleeping
+  assert.ok(Date.now() - started < 1_000, 'aborting the signal should resolve the sleep at once')
 })
 
 test('a clean exit for one repo does not un-pause another', async () => {

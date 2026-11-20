@@ -60,7 +60,7 @@ export interface BuildHandle {
 // The watcher's whole contact with the world: start a build, sleep, log. Injected so the loop tests without processes.
 export interface WatchEffects {
   startBuild(repo: RepoConfig): BuildHandle
-  sleep(ms: number): Promise<void>
+  sleep(ms: number, signal: AbortSignal): Promise<void>
   log(message: string): void
 }
 
@@ -68,8 +68,12 @@ export interface WatchEffects {
 // start again; one that exits non-zero pauses its repo until this process restarts. Nothing else is read.
 export async function watch(config: WatchConfig, effects: WatchEffects, stop: Promise<void>): Promise<void> {
   let stopping = false
+  // Aborted on shutdown so the pending poll sleep clears its timer at once, rather than keeping the process
+  // alive (and launchd waiting to restart it) for the rest of pollSeconds.
+  const waking = new AbortController()
   void stop.then(() => {
     stopping = true
+    waking.abort()
   })
   const running = new Map<string, BuildHandle>()
   const paused = new Set<string>()
@@ -89,7 +93,7 @@ export async function watch(config: WatchConfig, effects: WatchEffects, stop: Pr
         }
       })
     }
-    await Promise.race([effects.sleep(config.pollSeconds * 1000), stop])
+    await Promise.race([effects.sleep(config.pollSeconds * 1000, waking.signal), stop])
   }
 
   const handles = [...running.values()]
@@ -116,7 +120,19 @@ export function realWatchEffects(binPath: string): WatchEffects {
       })
       return { done, stop: () => child.kill('SIGTERM') }
     },
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep: (ms, signal) =>
+      new Promise((resolve) => {
+        if (signal.aborted) return resolve()
+        const timer = setTimeout(() => {
+          signal.removeEventListener('abort', onAbort)
+          resolve()
+        }, ms)
+        const onAbort = () => {
+          clearTimeout(timer)
+          resolve()
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+      }),
     log: (message) => console.error(message),
   }
 }
