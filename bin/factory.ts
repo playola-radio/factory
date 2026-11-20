@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util'
 import { DEFAULT_MODEL, NO_DELEGATION, OTHER_VENDOR, runAgent } from '../lib/agents.ts'
 import { readDesign } from '../lib/design.ts'
 import { finalizePlan } from '../lib/finalize.ts'
-import { abandon, finish, realWorld, startOrResume } from '../lib/build.ts'
+import { abandon, acquireLock, finish, realWorld, startOrResume } from '../lib/build.ts'
 import { removeDesignWorktrees } from '../lib/cleanup.ts'
 import { buildDesign } from '../lib/implement.ts'
 import { diskStore } from '../lib/store.ts'
@@ -92,11 +92,15 @@ async function main() {
   }
   if ((command === 'build' || command === 'abandon') && rest.length === 1) {
     const repo = path.resolve(rest[0])
-    const world = realWorld(repo, diskStore(HOME))
+    const world = realWorld(repo, diskStore(HOME), HOME)
     const worktreesDir = path.join(HOME, 'worktrees', world.repoId.replaceAll('/', '__'))
     const lock = path.join(worktreesDir, 'build.pid')
-    const running = fs.existsSync(lock) && Number(fs.readFileSync(lock, 'utf8'))
-    if (running && isAlive(running)) throw new Error(`A factory build is already running on ${world.repoId} (process ${running}); stop it before ${command === 'abandon' ? 'abandoning' : 'starting another build'}.`)
+    fs.mkdirSync(worktreesDir, { recursive: true })
+    // Hold the build lock across abandon too: acquireLock refuses while a live build still holds it, so abandon
+    // can never release the claim or remove worktrees out from under a build in flight (a stale lock from a dead
+    // process is taken over). Removing worktrees mid-build would clobber the agent working in them.
+    acquireLock(lock, world.repoId, isAlive)
+    process.on('exit', () => fs.rmSync(lock, { force: true }))
     if (command === 'abandon') {
       const claim = world.store.claimFor(world.repoId)
       const report = abandon(world)
@@ -105,9 +109,12 @@ async function main() {
       return
     }
     const base = values.base || world.store.claimFor(world.repoId)?.base || 'develop'
-    fs.mkdirSync(worktreesDir, { recursive: true })
-    fs.writeFileSync(lock, String(process.pid))
-    process.on('exit', () => fs.rmSync(lock, { force: true }))
+    // Hold the build lock before baseView and everything after it: baseView writes the shared `base` worktree,
+    // so two builds on the same repo must never reach it at once. acquireLock (above) takes build.pid atomically
+    // and refuses to overwrite a lock a live build still holds, so a second build cannot run agents in the same
+    // worktrees as one already in flight. A build with nothing to build still exits 0 whenever the volume has
+    // room for this few-byte write; the free-space floor keeps factory builds from ever driving the volume to
+    // the point where even that would fail.
     for (;;) {
       const report = startOrResume(baseView(repo, worktreesDir, base), world, base)
       if (report.state !== 'started' && report.state !== 'already in progress') {

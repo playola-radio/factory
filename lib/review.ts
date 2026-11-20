@@ -1,3 +1,4 @@
+import { ensureDiskSpace } from './build.ts'
 import type { World } from './build.ts'
 import { readDesign } from './design.ts'
 import { designValues, renderPrompt } from './prompts.ts'
@@ -96,6 +97,10 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     }
     toldOwner = false
 
+    // Before a review round, which may push commits and churn the worktree. The post-merge answering of owner
+    // questions below is deliberately not guarded: the merge has happened, so refusing there would only strand
+    // those questions unanswered (on restart the merged PR returns at once) without saving any build work.
+    ensureDiskSpace(world, claim.design)
     const recorded = workshop.evidenceStamp(worktree)
     const answers = await ask(items, failedChecks, conflicts ? 'conflicts' : 'open', github.head)
     const wave = review.rounds.at(-1)!

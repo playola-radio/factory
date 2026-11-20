@@ -33,3 +33,17 @@ factory abandon <repo-path>    # give up the design in progress
 ```
 
 Run `factory` with no arguments for the full usage. Tests: `npm test`.
+
+## Disk space
+
+`factory build` needs room to work — one two-PR iOS design can use 45–50 GB of worktrees and build output.
+Before it claims a design or starts any agent step (implement, a gate round, a review round), it checks the
+free space on the volume holding the factory home (`$FACTORY_HOME`, default `~/.factory`). If less than the
+floor is free, it refuses with a plain message saying how much is free and how much is needed, and exits 1
+(a build that has nothing to build still exits 0, even on a full disk).
+
+The floor is 20 GB by default. Override it with `FACTORY_MIN_FREE_GB`, a number of binary gigabytes (1024³
+bytes), e.g. `FACTORY_MIN_FREE_GB=40 factory build <repo-path>`.
+
+Under `factory watch`, a non-zero exit pauses that repo until the watcher restarts, so a low-disk refusal
+pauses the repo: free up space, then restart the watcher.
