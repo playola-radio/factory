@@ -8,6 +8,7 @@ import { DEFAULT_MODEL, NO_DELEGATION, OTHER_VENDOR, runAgent } from '../lib/age
 import { readDesign } from '../lib/design.ts'
 import { finalizePlan } from '../lib/finalize.ts'
 import { abandon, finish, realWorld, startOrResume } from '../lib/build.ts'
+import { removeDesignWorktrees } from '../lib/cleanup.ts'
 import { buildDesign } from '../lib/implement.ts'
 import { diskStore } from '../lib/store.ts'
 import { loadWatchConfig, realIsGitClone, realWatchEffects, watch } from '../lib/watch.ts'
@@ -92,20 +93,23 @@ async function main() {
   if ((command === 'build' || command === 'abandon') && rest.length === 1) {
     const repo = path.resolve(rest[0])
     const world = realWorld(repo, diskStore(HOME))
+    const worktreesDir = path.join(HOME, 'worktrees', world.repoId.replaceAll('/', '__'))
     if (command === 'abandon') {
-      console.log(JSON.stringify(abandon(world), null, 2))
+      const claim = world.store.claimFor(world.repoId)
+      const report = abandon(world)
+      if (report.state === 'abandoned' && claim) removeDesignWorktrees(repo, worktreesDir, claim.design, claim.base)
+      console.log(JSON.stringify(report, null, 2))
       return
     }
     const base = values.base || world.store.claimFor(world.repoId)?.base || 'develop'
-    const buildDir = path.join(HOME, 'worktrees', world.repoId.replaceAll('/', '__'))
-    const lock = path.join(buildDir, 'build.pid')
+    const lock = path.join(worktreesDir, 'build.pid')
     const running = fs.existsSync(lock) && Number(fs.readFileSync(lock, 'utf8'))
     if (running && isAlive(running)) throw new Error(`A factory build is already running on ${world.repoId} (process ${running}).`)
-    fs.mkdirSync(buildDir, { recursive: true })
+    fs.mkdirSync(worktreesDir, { recursive: true })
     fs.writeFileSync(lock, String(process.pid))
     process.on('exit', () => fs.rmSync(lock, { force: true }))
     for (;;) {
-      const report = startOrResume(baseView(repo, buildDir, base), world, base)
+      const report = startOrResume(baseView(repo, worktreesDir, base), world, base)
       if (report.state !== 'started' && report.state !== 'already in progress') {
         console.log(JSON.stringify(report, null, 2))
         if (report.state !== 'nothing to build') process.exitCode = 1
@@ -113,7 +117,7 @@ async function main() {
       }
       const runDir = path.join(HOME, 'runs', `${path.basename(repo)}-${report.design}-build`)
       console.error(`${report.state}: ${report.design} on ${base}. Agent traces: ${runDir}/traces`)
-      const pr = await buildDesign(report.claim.prs, report.claim, world, realWorkshop(repo, world.repoId, buildDir, runDir, values.model || DEFAULT_MODEL.claude))
+      const pr = await buildDesign(report.claim.prs, report.claim, world, realWorkshop(repo, world.repoId, worktreesDir, runDir, values.model || DEFAULT_MODEL.claude))
       console.log(JSON.stringify({ design: report.design, base, ...pr }, null, 2))
       if (pr.state !== 'all PRs merged') {
         process.exitCode = 2
