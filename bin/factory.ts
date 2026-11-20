@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util'
 import { DEFAULT_MODEL, NO_DELEGATION, OTHER_VENDOR, runAgent } from '../lib/agents.ts'
 import { readDesign } from '../lib/design.ts'
 import { finalizePlan } from '../lib/finalize.ts'
-import { abandon, finish, realWorld, startOrResume } from '../lib/build.ts'
+import { abandon, acquireLock, finish, realWorld, startOrResume } from '../lib/build.ts'
 import { buildDesign } from '../lib/implement.ts'
 import { diskStore } from '../lib/store.ts'
 import { loadWatchConfig, realIsGitClone, realWatchEffects, watch } from '../lib/watch.ts'
@@ -102,13 +102,15 @@ async function main() {
     const running = fs.existsSync(lock) && Number(fs.readFileSync(lock, 'utf8'))
     if (running && isAlive(running)) throw new Error(`A factory build is already running on ${world.repoId} (process ${running}).`)
     fs.mkdirSync(buildDir, { recursive: true })
-    // The lock is written only once there is work, so that a build with nothing to build never writes build.pid
-    // — on a full disk that write would ENOSPC and, as a non-zero exit, pause a repo that had no work. A
-    // low-disk refusal (startOrResume throws before claiming) exits before the lock is written for the same reason.
+    // The lock is taken only once there is work, so that a build with nothing to build never writes build.pid —
+    // on a full disk that write would ENOSPC and, as a non-zero exit, pause a repo that had no work. A low-disk
+    // refusal (startOrResume throws before claiming) exits before the lock is taken for the same reason.
+    // acquireLock takes it atomically and never overwrites a lock a live build still holds, so a build that
+    // resumes another's claim cannot end up running agents in the same worktrees as a build already in flight.
     let locked = false
     const lockForWork = () => {
       if (locked) return
-      fs.writeFileSync(lock, String(process.pid))
+      acquireLock(lock, world.repoId, isAlive)
       process.on('exit', () => fs.rmSync(lock, { force: true }))
       locked = true
     }

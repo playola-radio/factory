@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { abandon, finish, LowDiskError, repoIdFromRemote, startOrResume } from '../lib/build.ts'
+import { abandon, acquireLock, finish, LowDiskError, repoIdFromRemote, startOrResume } from '../lib/build.ts'
 import type { World } from '../lib/build.ts'
 import { readDesign } from '../lib/design.ts'
 import { runGate } from '../lib/gate.ts'
@@ -715,4 +715,27 @@ test('the build command runs the whole startup path and exits 0 when there is no
   const out = execFileSync('node', [bin, 'build', clone, '--base', 'develop'], { encoding: 'utf8', env: { ...process.env, FACTORY_HOME: home } })
   assert.match(out, /nothing to build/)
   assert.equal(fs.existsSync(path.join(home, 'worktrees', 'owner__app', 'build.pid')), false)
+})
+
+test('acquireLock writes this process as the owner when no build holds the lock', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-lock-'))
+  const lock = path.join(dir, 'build.pid')
+  acquireLock(lock, 'owner/app', () => true)
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid))
+})
+
+test('acquireLock refuses rather than overwrite a live build lock', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-lock-'))
+  const lock = path.join(dir, 'build.pid')
+  fs.writeFileSync(lock, '424242')
+  assert.throws(() => acquireLock(lock, 'owner/app', (pid) => pid === 424242), /already running on owner\/app \(process 424242\)/)
+  assert.equal(fs.readFileSync(lock, 'utf8'), '424242')
+})
+
+test('acquireLock takes over a stale lock whose process is gone', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-lock-'))
+  const lock = path.join(dir, 'build.pid')
+  fs.writeFileSync(lock, '424242')
+  acquireLock(lock, 'owner/app', () => false)
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid))
 })

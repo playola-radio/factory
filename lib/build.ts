@@ -114,6 +114,25 @@ export function finish(world: World): void {
 
 const git = (repo: string, ...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()
 
+// Takes the per-repo build lock atomically: creates build.pid with O_EXCL so it never overwrites a lock a live
+// build still holds (that build and this one would otherwise run agents in the same worktrees and clobber each
+// other). A lock left by a dead process is stale and gets taken over. Throws if another build is alive.
+export function acquireLock(lockPath: string, repoId: string, isAlive: (pid: number) => boolean): void {
+  for (;;) {
+    try {
+      fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' })
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      const other = Number(fs.readFileSync(lockPath, 'utf8'))
+      if (other && other !== process.pid && isAlive(other)) {
+        throw new Error(`A factory build is already running on ${repoId} (process ${other}).`)
+      }
+      fs.rmSync(lockPath, { force: true })
+    }
+  }
+}
+
 export function repoIdFromRemote(url: string): string {
   const match = url.match(/[:/]([^/:]+\/[^/]+?)(\.git)?$/)
   if (!match) throw new Error(`Cannot tell which repository this is from its origin address: ${url}`)
