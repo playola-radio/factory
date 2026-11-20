@@ -4,6 +4,11 @@
 <dict>
   <key>Label</key>
   <string>com.playola.factory-watch</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FACTORY_HOME</key>
+    <string>__FACTORY_HOME__</string>
+  </dict>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>

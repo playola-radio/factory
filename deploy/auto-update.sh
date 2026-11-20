@@ -17,7 +17,10 @@ cd "$REPO_DIR"
 git fetch -q origin main
 local_head="$(git rev-parse HEAD)"
 remote_head="$(git rev-parse origin/main)"
-if [ "$local_head" = "$remote_head" ]; then
+# Only act when origin/main is strictly ahead of this checkout — i.e. HEAD is an ancestor of it and they differ.
+# If they are equal, or this checkout is ahead of or has diverged from origin/main, there is nothing to
+# fast-forward to; restarting the watcher anyway would just clear paused repos every couple of minutes.
+if [ "$local_head" = "$remote_head" ] || ! git merge-base --is-ancestor HEAD origin/main; then
   exit 0
 fi
 log "origin/main moved ${local_head:0:7} -> ${remote_head:0:7}; checking for active agents before updating"

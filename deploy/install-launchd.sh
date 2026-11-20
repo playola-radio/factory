@@ -11,10 +11,25 @@ LABELS=(com.playola.factory-watch com.playola.factory-updater)
 
 mkdir -p "$AGENTS_DIR" "$FACTORY_HOME"
 
+# Escape XML metacharacters so a path containing & < > stays valid inside the plist.
+xml_escape() {
+  local s=$1
+  s=${s//&/&amp;}
+  s=${s//</&lt;}
+  s=${s//>/&gt;}
+  printf '%s' "$s"
+}
+repo_xml="$(xml_escape "$REPO_DIR")"
+home_xml="$(xml_escape "$FACTORY_HOME")"
+
 for label in "${LABELS[@]}"; do
   template="$SCRIPT_DIR/$label.plist.template"
   target="$AGENTS_DIR/$label.plist"
-  sed -e "s#__REPO_DIR__#${REPO_DIR}#g" -e "s#__FACTORY_HOME__#${FACTORY_HOME}#g" "$template" > "$target"
+  # Literal bash replacement (not sed): the substituted paths are data, never patterns, so &, #, and \ are safe.
+  content="$(cat "$template")"
+  content=${content//__REPO_DIR__/$repo_xml}
+  content=${content//__FACTORY_HOME__/$home_xml}
+  printf '%s\n' "$content" > "$target"
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$target"
   echo "loaded $label -> $target"
