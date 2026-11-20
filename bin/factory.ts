@@ -10,6 +10,7 @@ import { finalizePlan } from '../lib/finalize.ts'
 import { abandon, finish, realWorld, startOrResume } from '../lib/build.ts'
 import { buildDesign } from '../lib/implement.ts'
 import { diskStore } from '../lib/store.ts'
+import { loadWatchConfig, realIsGitClone, realWatchEffects, watch } from '../lib/watch.ts'
 import { baseView, realWorkshop } from '../lib/workshop.ts'
 import { designValues, renderPrompt } from '../lib/prompts.ts'
 import { designStatuses } from '../lib/readiness.ts'
@@ -28,6 +29,9 @@ const USAGE = `Usage:
                                   the owner approves, and go on to the next PR and then the next design (the last PR moves its design to factory/done;
                                   --one-design stops once the current design is finished); --base is the branch its PRs go into (default develop)
   factory abandon <repo-path>     give up the design in progress so the next build can start
+  factory watch [--config <path>] keep a factory build running for every repo in the config (default
+                                  $FACTORY_HOME/watch.json), building new designs unattended until stopped with
+                                  SIGTERM; a repo whose build exits non-zero is left until the watcher restarts
 
   finalize exits 0 when the plan is finished, 2 when the plan needs fixing, 1 on an error.`
 
@@ -73,6 +77,7 @@ async function main() {
     options: {
       author: { type: 'string' },
       base: { type: 'string' },
+      config: { type: 'string' },
       model: { type: 'string' },
       'one-design': { type: 'boolean' },
       'reviewer-model': { type: 'string' },
@@ -117,6 +122,18 @@ async function main() {
       finish(world)
       if (values['one-design']) return
     }
+  }
+  if (command === 'watch' && rest.length === 0) {
+    const configPath = values.config || path.join(HOME, 'watch.json')
+    if (!fs.existsSync(configPath)) throw new Error(`No watch config at ${configPath}. Create it (see the factory watch design) or pass --config.`)
+    const config = loadWatchConfig(fs.readFileSync(configPath, 'utf8'), realIsGitClone, os.homedir())
+    const stop = new Promise<void>((resolve) => {
+      const onSignal = () => resolve()
+      process.once('SIGTERM', onSignal)
+      process.once('SIGINT', onSignal)
+    })
+    await watch(config, realWatchEffects(import.meta.filename), stop)
+    return
   }
   if (command !== 'finalize' || rest.length < 1 || rest.length > 2) throw new Error(USAGE)
   const report = await finalize(rest[0], rest[1], { author: values.author, 'reviewer-model': values['reviewer-model'] })
