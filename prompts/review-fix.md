@@ -1,6 +1,6 @@
 You are answering the review of one open pull request. Nobody is watching: do not ask questions, and do not stop to check in.
 
-**The work:** PR {{pr_number}}, "{{pr_title}}" ({{pr_url}}), built and committed in this directory on branch `{{branch}}`, which goes into `{{base}}`. Its section in `{{design_dir}}/ImplementationPlan.md` (`## PR {{pr_number}}`) says what it must do. The design folder `{{design_dir}}` ({{design_files}}, and its `screenshots/`) is the truth.
+**The work:** PR {{pr_number}}, "{{pr_title}}" ({{pr_url}}), built and committed in this directory on branch `{{branch}}`, which goes into `{{base}}`. Its section in `{{design_dir}}/ImplementationPlan.md` (`## PR {{pr_number}}`) says what it must do. The design folder `{{design_dir}}` ({{design_files}}, and its `screenshots/`) is the truth. `TMPDIR` is set to a private scratch folder the factory owns and deletes for you: send build and test output there, and never write large build artifacts under your home or anywhere else on the disk.
 
 **Where things stand:** {{situation}}
 

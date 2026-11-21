@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { DEFAULT_MODEL, runAgent } from './agents.ts'
+import { removeWorktree, scratchDir } from './cleanup.ts'
 import { readDesign } from './design.ts'
 import { reasonsNotBuildable } from './readiness.ts'
 import type { FixWave, Implementation, PullRequest, ReviewWave } from './store.ts'
@@ -66,6 +67,8 @@ export interface Workshop {
   reply(number: number, item: ReviewItem, body: string, resolve: boolean): void
   requestReview(number: number): void
   merge(number: number, head: string): void
+  // Removes a merged PR's worktree, local branch, and scratch folder; leaves it if it still has unpushed commits.
+  discardWorktree(worktree: string, branch: string, base: string): void
   wait(): Promise<void>
 }
 
@@ -131,8 +134,11 @@ export function baseView(repo: string, worktreesDir: string, base: string): stri
 const git = (dir: string, ...args: string[]) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' }).trim()
 
 export function realWorkshop(repo: string, repoId: string, worktreesDir: string, runDir: string, model: string): Workshop {
-  const writer = (schemaName: string, cwd: string, prompt: string, step: string) =>
-    runAgent({ vendor: 'claude', model, prompt, schemaFile: schema(schemaName), cwd, runDir, step, canWrite: true, timeoutMs: IMPLEMENT_TIMEOUT_MS, env: AUTHOR_ENV })
+  const writer = (schemaName: string, cwd: string, prompt: string, step: string) => {
+    const tmpdir = scratchDir(worktreesDir, cwd)
+    fs.mkdirSync(tmpdir, { recursive: true })
+    return runAgent({ vendor: 'claude', model, prompt, schemaFile: schema(schemaName), cwd, runDir, step, canWrite: true, timeoutMs: IMPLEMENT_TIMEOUT_MS, env: { ...AUTHOR_ENV, TMPDIR: tmpdir } })
+  }
   const reviewer = (schemaName: string, cwd: string, prompt: string, step: string) =>
     runAgent({ vendor: 'codex', model: DEFAULT_MODEL.codex, prompt, schemaFile: schema(schemaName), cwd, runDir, step, timeoutMs: REVIEW_TIMEOUT_MS })
   return {
@@ -244,6 +250,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     },
     requestReview: (number) => void gh('pr', 'comment', String(number), '-R', repoId, '--body', '@greptile review this'),
     merge: (number, head) => void gh('pr', 'merge', String(number), '-R', repoId, '--merge', '--match-head-commit', head),
+    discardWorktree: (worktree, branch, base) => void removeWorktree(repo, worktreesDir, worktree, branch, base),
     wait: () => new Promise((resolve) => setTimeout(resolve, POLL_MS)),
   }
 }
