@@ -18,26 +18,29 @@ export function scratchDir(worktreesDir: string, worktree: string): string {
   return path.join(worktreesDir, '.scratch', path.basename(worktree))
 }
 
-// True when the worktree's branch has commits that are not on its pushed remote branch, so removing it would lose work.
-function hasUnpushedCommits(worktree: string, branch: string, base: string): boolean {
-  const head = git(worktree, 'rev-parse', 'HEAD')
+// True when the branch has commits that are not on its pushed remote branch, so removing it would lose work. Checked
+// from the main repo rather than the worktree, so it is still correct when the worktree folder was deleted by hand
+// (git keeps the branch ref) — otherwise a missing folder would let `git branch -D` destroy unpushed commits.
+function hasUnpushedCommits(repo: string, branch: string, base: string): boolean {
+  if (!gitOk(repo, 'rev-parse', '--verify', `refs/heads/${branch}`)) return false
+  const head = git(repo, 'rev-parse', `refs/heads/${branch}`)
   // Compare against the branch's own remote tip. When it was never pushed (or was deleted on merge), fall back to the
   // freshly fetched base: a merged branch's HEAD is an ancestor of base, while unmerged, unpushed commits are not.
   let against: string
-  if (gitOk(worktree, 'fetch', 'origin', branch)) {
-    against = git(worktree, 'rev-parse', 'FETCH_HEAD')
+  if (gitOk(repo, 'fetch', 'origin', branch)) {
+    against = git(repo, 'rev-parse', 'FETCH_HEAD')
   } else {
-    gitOk(worktree, 'fetch', 'origin', base)
+    gitOk(repo, 'fetch', 'origin', base)
     against = `origin/${base}`
   }
-  return !gitOk(worktree, 'merge-base', '--is-ancestor', head, against)
+  return !gitOk(repo, 'merge-base', '--is-ancestor', head, against)
 }
 
 // Removes one PR's worktree, its local branch, and its scratch folder. Leaves everything in place and returns false
 // when the branch still has commits that are not on its remote; otherwise force-removes it (clearing build junk) and
 // returns true.
 export function removeWorktree(repo: string, worktreesDir: string, worktree: string, branch: string, base: string): boolean {
-  if (fs.existsSync(worktree) && hasUnpushedCommits(worktree, branch, base)) return false
+  if (hasUnpushedCommits(repo, branch, base)) return false
   if (fs.existsSync(worktree)) git(repo, 'worktree', 'remove', '--force', worktree)
   else gitOk(repo, 'worktree', 'prune')
   gitOk(repo, 'branch', '-D', branch)

@@ -128,6 +128,17 @@ test('keeps cleaning the other worktrees when one folder was deleted by hand', (
   assert.doesNotMatch(git(repo, 'branch', '--list', 'factory/001-x/pr-2'), /factory/)
 })
 
+test('keeps the branch of a worktree whose folder was deleted by hand but still has unpushed commits', () => {
+  const { repo, worktreesDir } = makeRepo()
+  const pr1 = addWorktree(repo, worktreesDir, 'factory/001-x/pr-1', { commit: true, push: false })
+  fs.rmSync(pr1, { recursive: true, force: true })
+
+  const result = removeDesignWorktrees(repo, worktreesDir, '001-x', 'main')
+
+  assert.deepEqual(result, { removed: [], kept: ['factory/001-x/pr-1'] })
+  assert.match(git(repo, 'branch', '--list', 'factory/001-x/pr-1'), /factory\/001-x\/pr-1/)
+})
+
 test('scratchDir is a per-worktree folder under the worktrees dir, outside the worktree itself', () => {
   const worktreesDir = '/home/.factory/worktrees/owner__app'
   const worktree = path.join(worktreesDir, 'factory__001-x__pr-1')
