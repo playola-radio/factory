@@ -16,7 +16,7 @@ You are fixing what two reviewers found in one pull request before it is opened.
 **Then:**
 
 1. Read the repo's `CLAUDE.md` (and `AGENTS.md`) and follow them.
-2. Run every check the plan section and the repo's rules name again (build, the listed test suites plus the full existing suites of any shared code you changed, lint, changelog check, and anything the rules require after a later change, such as re-recording stale evidence). Fix what fails. Never disable a test or pass `--no-verify`.
+2. Run every check the plan section and the repo's rules name again (build, the listed test suites plus the full existing suites of any shared code you changed, lint, changelog check, and anything the rules require after a later change, such as re-recording stale evidence, which goes back in `$TMPDIR/evidence/` with its `evidence.json` updated). Fix what fails. Never disable a test or pass `--no-verify`.
 3. Commit everything. No `Co-Authored-By` or any other co-sign line in commit messages.
 
 **Not yours:** do not push, open a pull request, call Codex, or edit anything under `factory/`.
