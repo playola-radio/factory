@@ -36,11 +36,12 @@ function hasUnpushedCommits(repo: string, branch: string, base: string): boolean
   return !gitOk(repo, 'merge-base', '--is-ancestor', head, against)
 }
 
-// Removes one PR's worktree, its local branch, and its scratch folder. Leaves everything in place and returns false
-// when the branch still has commits that are not on its remote; otherwise force-removes it (clearing build junk) and
-// returns true.
-export function removeWorktree(repo: string, worktreesDir: string, worktree: string, branch: string, base: string): boolean {
-  if (hasUnpushedCommits(repo, branch, base)) return false
+// Removes one PR's worktree, its local branch, and its scratch folder. When the PR has merged its work is in the
+// base and removal is always safe; otherwise (abandon) it leaves everything in place and returns false if the branch
+// still has commits not on its remote — a squash- or rebase-merged branch would look unpushed, which is why the
+// merged caller skips the check. Removal force-clears build junk and returns true.
+export function removeWorktree(repo: string, worktreesDir: string, worktree: string, branch: string, base: string, merged = false): boolean {
+  if (!merged && hasUnpushedCommits(repo, branch, base)) return false
   if (fs.existsSync(worktree)) git(repo, 'worktree', 'remove', '--force', worktree)
   else gitOk(repo, 'worktree', 'prune')
   gitOk(repo, 'branch', '-D', branch)

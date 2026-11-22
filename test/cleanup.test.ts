@@ -66,6 +66,17 @@ test('removes a fully pushed worktree, its local branch, and its scratch folder'
   assert.doesNotMatch(git(repo, 'branch', '--list', branch), /factory/)
 })
 
+test('removes a merged worktree even when its tip is not on the remote branch or base (squash/rebase merge)', () => {
+  const { repo, worktreesDir } = makeRepo()
+  const branch = 'factory/001-x/pr-1'
+  // A squash/rebase merge leaves the original tip off both the (now-deleted) remote branch and the base, which is
+  // exactly what an unpushed branch looks like — but the caller knows this PR merged, so its work is safe.
+  const worktree = addWorktree(repo, worktreesDir, branch, { commit: true, push: false })
+
+  assert.equal(removeWorktree(repo, worktreesDir, worktree, branch, 'main', true), true)
+  assert.equal(fs.existsSync(worktree), false)
+})
+
 test('keeps a worktree that has a commit not on its remote branch', () => {
   const { repo, worktreesDir } = makeRepo()
   const branch = 'factory/001-x/pr-1'

@@ -250,7 +250,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     },
     requestReview: (number) => void gh('pr', 'comment', String(number), '-R', repoId, '--body', '@greptile review this'),
     merge: (number, head) => void gh('pr', 'merge', String(number), '-R', repoId, '--merge', '--match-head-commit', head),
-    discardWorktree: (worktree, branch, base) => void removeWorktree(repo, worktreesDir, worktree, branch, base),
+    discardWorktree: (worktree, branch, base) => void removeWorktree(repo, worktreesDir, worktree, branch, base, true),
     wait: () => new Promise((resolve) => setTimeout(resolve, POLL_MS)),
   }
 }
