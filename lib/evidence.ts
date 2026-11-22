@@ -36,6 +36,8 @@ function readManifest(dir: string): EvidenceFile[] {
     if (typeof entry?.file !== 'string' || typeof entry.caption !== 'string' || !KINDS.includes(entry.kind)) {
       throw new Error(`${manifest} has an entry without a file, a caption, and a kind of ${KINDS.join(' or ')}: ${JSON.stringify(entry)}`)
     }
+    // Anything else (a space, a bracket) breaks the Markdown link GitHub rewrites, which would misplace hosted addresses.
+    if (!/^[\w./-]+$/.test(entry.file)) throw new Error(`${manifest} names ${JSON.stringify(entry.file)}; use only letters, digits, dots, dashes and underscores.`)
     const full = path.resolve(dir, entry.file)
     if (!full.startsWith(path.resolve(dir) + path.sep)) throw new Error(`${manifest} names ${entry.file}, which is outside ${dir}.`)
     if (!fs.existsSync(full)) throw new Error(`${manifest} names ${entry.file}, which is not in ${dir}.`)

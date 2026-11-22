@@ -314,7 +314,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       mergedLookups.push(branch)
       return options.merged?.[branch] ?? null
     },
-    evidenceStamp: () => (options.reRecords ? head : 'same'),
+    evidenceStamp: () => (options.reRecords ? String(reviewPrompts.length) : 'same'),
     publishEvidence: () => {
       did.evidencePosts += 1
       steps.push('evidence published')
@@ -760,6 +760,11 @@ test('finishing a design frees the repo and forgets its PRs, so the next design 
 test('evidence recorded again during a fix is posted to the PR after the push', async () => {
   const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }], reRecords: true })
   assert.deepEqual([did.pushed, did.evidencePosts], [1, 2])
+})
+
+test('a round that only records the demo the owner asked for still posts it', async () => {
+  const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }], reRecords: true, answerAction: 'answered' })
+  assert.deepEqual([did.pushed, did.evidencePosts], [0, 2])
 })
 
 test('a fix that records nothing new posts no evidence', async () => {

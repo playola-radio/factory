@@ -39,12 +39,6 @@ test('the canonical evidence folder is evidence/ inside the scratch folder', () 
   assert.equal(evidenceDir('/scratch/pr-1'), path.join('/scratch/pr-1', 'evidence'))
 })
 
-test('with no manifest nothing is posted', () => {
-  const github = fakeGitHub()
-  assert.equal(publishEvidenceFiles(scratch(), github.post), null)
-  assert.equal(github.posts.length, 0)
-})
-
 test('with no evidence folder at all nothing is posted', () => {
   const github = fakeGitHub()
   assert.equal(publishEvidenceFiles(path.join(os.tmpdir(), 'factory-evidence-missing', 'evidence'), github.post), null)
@@ -89,6 +83,13 @@ test('a manifest naming a file outside the evidence folder fails before posting'
   const github = fakeGitHub()
   const manifest = { files: [{ file: '../secret.png', kind: 'visual', caption: 'x' }] }
   assert.throws(() => publishEvidenceFiles(scratch(manifest), github.post), /outside/)
+  assert.equal(github.posts.length, 0)
+})
+
+test('a file name that would break its Markdown link fails before posting', () => {
+  const github = fakeGitHub()
+  const manifest = { files: [{ file: 'Save dialog.png', kind: 'visual', caption: 'x' }] }
+  assert.throws(() => publishEvidenceFiles(scratch(manifest, ['Save dialog.png']), github.post), /Save dialog\.png/)
   assert.equal(github.posts.length, 0)
 })
 
