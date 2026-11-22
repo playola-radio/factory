@@ -15,7 +15,7 @@ import { buildDesign, buildNextPr } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, MergedPullRequest, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
-import type { Claim, FixWave, Implementation, PrReport, ReviewWave } from '../lib/store.ts'
+import type { Claim, FixWave, Implementation, PrReport, PublishedEvidence, ReviewWave } from '../lib/store.ts'
 import type { PlannedPr } from '../lib/types.ts'
 
 const GB = 1024 ** 3
@@ -252,7 +252,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; design?: DesignOptions; merged?: Record<string, MergedPullRequest | null> } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; evidence?: (PublishedEvidence | null)[]; design?: DesignOptions; merged?: Record<string, MergedPullRequest | null> } = {}) {
   const { repo, world, events } = setup([['001-first', true]], [], options.design)
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -270,6 +270,8 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const replies: { id: string; body: string; resolved: boolean }[] = []
   const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, evidencePosts: 0, discarded: null as null | { worktree: string; branch: string; base: string } }
   const steps: string[] = []
+  // Each publish finds the next recording; with none left, the PR has no evidence.
+  const evidence = [...(options.evidence ?? [])]
   let head = 'abc'
   const workshop: Workshop = {
     prepareWorktree: () => options.worktree ?? repo,
@@ -312,8 +314,12 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       mergedLookups.push(branch)
       return options.merged?.[branch] ?? null
     },
-    evidenceStamp: () => (options.reRecords ? head : 'same'),
-    publishEvidence: () => void (did.evidencePosts += 1),
+    evidenceStamp: () => (options.reRecords ? String(reviewPrompts.length) : 'same'),
+    publishEvidence: () => {
+      did.evidencePosts += 1
+      steps.push('evidence published')
+      return evidence.shift() ?? null
+    },
     pullRequestState: () => ({ state: 'open', head, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptileScore: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
     answerReview: async (_worktree, prompt) => {
       reviewPrompts.push(prompt)
@@ -594,8 +600,9 @@ const OWNER_THREAD: ReviewItem = { id: 'T2', kind: 'thread', latest: 'c1', fromO
 const OWNER_COMMENT: ReviewItem = { id: 'comment-5', kind: 'comment', latest: 'c1', fromOwner: true, text: 'Rename the button please' }
 
 test('an approved PR with passing checks is merged, and the design goes on until every PR is merged', async () => {
-  const { report, did, design } = await buildPr()
+  const { report, did, design, world } = await buildPr()
   assert.equal(reviewState(report), 'merged')
+  assert.equal(world.store.prReport('owner/app', 1)?.evidence, undefined)
   assert.equal(did.merged, 1)
   assert.deepEqual(await design(), { state: 'all PRs merged' })
 })
@@ -649,7 +656,7 @@ test("a bot's finding is fixed, pushed, answered in its thread, resolved, and re
   const { repo, report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptileScore: 0 }, { approved: true }] })
   assert.match(reviewPrompts[0], /\*\*R1\*\* \[bot\] `App.swift:9`\n  > greptile-apps: this breaks a repo rule/)
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
-  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, evidencePosts: 0, discarded: { worktree: repo, branch: 'factory/001-first/pr-1', base: 'feature/x' } })
+  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, evidencePosts: 1, discarded: { worktree: repo, branch: 'factory/001-first/pr-1', base: 'feature/x' } })
   assert.equal(reviewState(report), 'merged')
 })
 
@@ -753,12 +760,42 @@ test('finishing a design frees the repo and forgets its PRs, so the next design 
 
 test('evidence recorded again during a fix is posted to the PR after the push', async () => {
   const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }], reRecords: true })
-  assert.deepEqual([did.pushed, did.evidencePosts], [1, 1])
+  assert.deepEqual([did.pushed, did.evidencePosts], [1, 2])
+})
+
+test('a round that only records the demo the owner asked for still posts it', async () => {
+  const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }], reRecords: true, answerAction: 'answered' })
+  assert.deepEqual([did.pushed, did.evidencePosts], [0, 2])
 })
 
 test('a fix that records nothing new posts no evidence', async () => {
   const { did } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }] })
-  assert.deepEqual([did.pushed, did.evidencePosts], [1, 0])
+  assert.deepEqual([did.pushed, did.evidencePosts], [1, 1])
+})
+
+const RECORDING: PublishedEvidence = {
+  comment: 'https://github.com/owner/app/pull/7#issuecomment-1',
+  files: [{ file: 'demo.mp4', kind: 'functional', caption: 'Saving a show', url: 'https://github.com/user-attachments/assets/v1' }],
+}
+
+test('evidence from a failed review round is posted and saved before the round stops', async () => {
+  const again = { ...RECORDING, comment: 'https://github.com/owner/app/pull/7#issuecomment-2' }
+  const { report, did, world } = await buildPr({ github: [{ items: [OWNER_THREAD] }], reRecords: true, evidence: [RECORDING, again], answer: { checks: [{ command: 'npm test', passed: false }] } })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.equal(did.evidencePosts, 2)
+  assert.deepEqual(world.store.prReport('owner/app', 1)?.evidence, again)
+})
+
+test("evidence is posted once the PR is open, kept in the PR's report, and posted before the worktree is discarded", async () => {
+  const { world, steps } = await buildPr({ evidence: [RECORDING] })
+  assert.deepEqual(steps.filter((step) => ['opened', 'evidence published', 'discarded'].includes(step)), ['opened', 'evidence published', 'discarded'])
+  assert.deepEqual(world.store.prReport('owner/app', 1)?.evidence, RECORDING)
+})
+
+test('evidence recorded again during a fix replaces the addresses kept in the report', async () => {
+  const again = { ...RECORDING, comment: 'https://github.com/owner/app/pull/7#issuecomment-2' }
+  const { report } = await buildPr({ github: [{ items: [OWNER_THREAD] }, { approved: true }], reRecords: true, evidence: [RECORDING, again] })
+  assert.deepEqual((report as PrReport).evidence, again)
 })
 
 test("the owner's comment gets an eyes reaction before work on it starts, and a bot's does not", async () => {

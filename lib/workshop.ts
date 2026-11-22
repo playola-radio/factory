@@ -6,7 +6,8 @@ import { DEFAULT_MODEL, runAgent } from './agents.ts'
 import { removeWorktree, scratchDir } from './cleanup.ts'
 import { readDesign } from './design.ts'
 import { reasonsNotBuildable } from './readiness.ts'
-import type { FixWave, Implementation, PullRequest, ReviewWave } from './store.ts'
+import { evidenceDir, evidenceStampOf, publishEvidenceFiles } from './evidence.ts'
+import type { FixWave, Implementation, PublishedEvidence, PullRequest, ReviewWave } from './store.ts'
 
 export interface BreakFinding {
   severity: 'P0' | 'P1' | 'P2' | 'P3'
@@ -69,7 +70,9 @@ export interface Workshop {
   mergedPullRequest(branch: string, base: string): MergedPullRequest | null
   // Changes whenever evidence is recorded again.
   evidenceStamp(worktree: string): string
-  publishEvidence(worktree: string, number: number): void
+  // Runs the repo's own `ux-evidence-publish` target when it has one, and posts the recordings the implementer listed
+  // in its scratch folder's evidence/evidence.json; returns where GitHub hosts those, or null when it listed none.
+  publishEvidence(worktree: string, number: number): PublishedEvidence | null
   pullRequestState(number: number): PullRequestState
   answerReview(worktree: string, prompt: string, step: string): Promise<ReviewWave>
   push(worktree: string, branch: string): void
@@ -198,9 +201,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       this.push(worktree, branch)
       const existing = JSON.parse(gh('pr', 'list', '-R', repoId, '--head', branch, '--state', 'open', '--json', 'number,url'))[0] as PullRequest | undefined
       const url = existing?.url ?? gh('pr', 'create', '-R', repoId, '--head', branch, '--base', base, '--title', title, '--body', body)
-      const pullRequest = { number: Number(url.split('/').pop()), url }
-      this.publishEvidence(worktree, pullRequest.number)
-      return pullRequest
+      return { number: Number(url.split('/').pop()), url }
     },
     mergedPullRequest(branch, base) {
       const rows = JSON.parse(gh('pr', 'list', '-R', repoId, '--head', branch, '--base', base, '--state', 'merged', '--json', 'number,url,title')) as MergedPullRequest[]
@@ -208,13 +209,24 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     },
     evidenceStamp(worktree) {
       const artifacts = path.join(worktree, '.qa-artifacts')
-      if (!fs.existsSync(artifacts)) return ''
-      return fs.readdirSync(artifacts).sort().map((id) => path.join(artifacts, id, 'result.json')).filter((file) => fs.existsSync(file)).map((file) => fs.readFileSync(file, 'utf8')).join('\n')
+      const results = fs.existsSync(artifacts)
+        ? fs.readdirSync(artifacts).sort().map((id) => path.join(artifacts, id, 'result.json')).filter((file) => fs.existsSync(file)).map((file) => fs.readFileSync(file, 'utf8'))
+        : []
+      return [...results, evidenceStampOf(evidenceDir(scratchDir(worktreesDir, worktree)))].join('\n')
     },
     publishEvidence(worktree, number) {
       const makefile = path.join(worktree, 'Makefile')
-      if (!fs.existsSync(makefile) || !/^ux-evidence-publish:/m.test(fs.readFileSync(makefile, 'utf8'))) return
-      execFileSync('make', ['ux-evidence-publish', `PR=${number}`], asAuthor(worktree))
+      if (fs.existsSync(makefile) && /^ux-evidence-publish:/m.test(fs.readFileSync(makefile, 'utf8'))) {
+        execFileSync('make', ['ux-evidence-publish', `PR=${number}`], asAuthor(worktree))
+      }
+      const dir = evidenceDir(scratchDir(worktreesDir, worktree))
+      return publishEvidenceFiles(dir, (body, attachments) => {
+        const options = asAuthor(dir)
+        const url = execFileSync('gh', ['pr', 'comment', String(number), '-R', repoId, '--body', body, ...attachments.flatMap((file) => ['--attach', file])], options).trim()
+        const id = /issuecomment-(\d+)/.exec(url)?.[1]
+        if (!id) throw new Error(`gh pr comment did not return a comment address for the evidence on PR ${number}: ${url}`)
+        return { url, body: gh('api', `repos/${repoId}/issues/comments/${id}`, '--jq', '.body') }
+      })
     },
     push(worktree, branch) {
       execFileSync('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'push', `https://github.com/${repoId}.git`, branch], asAuthor(worktree))

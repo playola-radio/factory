@@ -104,6 +104,12 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     const recorded = workshop.evidenceStamp(worktree)
     const answers = await ask(items, failedChecks, conflicts ? 'conflicts' : 'open', github.head)
     const wave = review.rounds.at(-1)!
+    // Preserve recordings even when this round fails and stops before pushing its changes.
+    const evidence = workshop.evidenceStamp(worktree) !== recorded ? workshop.publishEvidence(worktree, number) : null
+    if (evidence) {
+      report = { ...report, evidence }
+      save()
+    }
     const problems = [
       ...wave.blockers.map((blocker) => `Blocked: ${blocker}`),
       ...wave.checks.filter((check) => !check.passed).map((check) => `Check failed: ${check.command}`),
@@ -114,7 +120,6 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
 
     const pushed = workshop.head(worktree) !== github.head
     if (pushed) workshop.push(worktree, branch)
-    if (pushed && workshop.evidenceStamp(worktree) !== recorded) workshop.publishEvidence(worktree, number)
     for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
     if (pushed && github.greptileScore !== null && github.greptileScore < RE_REVIEW_BELOW) workshop.requestReview(number)
     review = { ...review, answered: [...review.answered, ...items.filter((item) => item.kind === 'comment').map((item) => item.id)] }

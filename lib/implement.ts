@@ -47,7 +47,10 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   const openPr = (gated: PrReport): Promise<PrReport> => {
     if (last) workshop.markDesignBuilt(gated.worktree, claim.design)
     const body = pullRequestBody(gated, claim.design, pr.number, prs.length)
-    const opened = { ...gated, pullRequest: workshop.openPullRequest(gated.worktree, gated.branch, claim.base, pr.title, body) }
+    const pullRequest = workshop.openPullRequest(gated.worktree, gated.branch, claim.base, pr.title, body)
+    // Posted while the scratch folder holding the recordings still exists; it goes with the worktree once the PR merges.
+    const evidence = workshop.publishEvidence(gated.worktree, pullRequest.number)
+    const opened = { ...gated, pullRequest, ...(evidence && { evidence }) }
     world.store.savePrReport(claim.repo, opened)
     world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type: 'pr opened' })
     return watchPr(pr, claim, opened, world, workshop)

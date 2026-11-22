@@ -92,6 +92,19 @@ export interface ReviewReport {
   problems: string[]
 }
 
+export interface EvidenceFile {
+  // Relative to the implementer's evidence folder.
+  file: string
+  kind: 'functional' | 'visual'
+  caption: string
+}
+
+// The PR comment the factory posted the implementer's recordings in, and the address GitHub hosts each one at.
+export interface PublishedEvidence {
+  comment: string
+  files: (EvidenceFile & { url: string })[]
+}
+
 export interface PrReport {
   state: 'implemented' | 'needs attention'
   number: number
@@ -103,6 +116,7 @@ export interface PrReport {
   implementation: Implementation
   gate?: GateReport
   pullRequest?: PullRequest
+  evidence?: PublishedEvidence
   review?: ReviewReport
 }
 
