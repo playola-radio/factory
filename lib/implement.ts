@@ -77,6 +77,18 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   if (!previous) {
     const merged = workshop.mergedPullRequest(branch, claim.base)
     if (merged) {
+      // The branch name carries only the design and PR number, so a merged PR from an earlier plan can match a
+      // rewritten PR that reuses the number for different work. Its title is the plan title it was opened under; when
+      // that no longer matches this PR's title the plan was rewritten after the merge — stop rather than skip new work.
+      if (merged.title !== pr.title) {
+        return { state: 'stopped', number: pr.number, reason: `${branch} is already merged on GitHub as PR ${merged.number} (${merged.url}) titled "${merged.title}", but PR ${pr.number} in the plan is now "${pr.title}". The plan was rewritten after that PR merged; reconcile it before rebuilding.` }
+      }
+      // The last PR's build is what moves the design into factory/done; a last PR already merged means that move never
+      // rode a PR (the plan was shortened to end on an already-merged PR). Finishing here would leave the design in
+      // factory/ready and the build loop would re-claim it forever, so stop for the owner to move it.
+      if (pr === prs.at(-1)) {
+        return { state: 'stopped', number: pr.number, reason: `Every PR for ${claim.design} is already merged on GitHub (PR ${pr.number}, ${merged.url}), but the design is still in factory/ready. Move it to factory/done on ${claim.base} to finish it.` }
+      }
       world.store.savePrReport(claim.repo, mergedReport(pr.number, branch, merged))
       world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type: 'pr merged' })
       return buildNextPr(prs, claim, world, workshop)

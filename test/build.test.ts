@@ -13,9 +13,9 @@ import { watchPr } from '../lib/review.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildDesign, buildNextPr } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
-import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
+import type { BreakFinding, ExcessFinding, MergedPullRequest, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
-import type { Claim, FixWave, Implementation, PrReport, PullRequest, ReviewWave } from '../lib/store.ts'
+import type { Claim, FixWave, Implementation, PrReport, ReviewWave } from '../lib/store.ts'
 import type { PlannedPr } from '../lib/types.ts'
 
 const GB = 1024 ** 3
@@ -252,7 +252,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; design?: DesignOptions; merged?: Record<string, PullRequest | null> } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; design?: DesignOptions; merged?: Record<string, MergedPullRequest | null> } = {}) {
   const { repo, world, events } = setup([['001-first', true]], [], options.design)
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -354,7 +354,8 @@ test('once every PR is merged nothing more is run', async () => {
   assert.deepEqual([prompts.length, reviews.length, opened.length], [1, 1, 1])
 })
 
-const MERGED_1: PullRequest = { number: 16, url: 'https://github.com/owner/app/pull/16' }
+// The merged PR carries the title the factory opened it under — PR 1's planned title in the two-PR plan.
+const MERGED_1: MergedPullRequest = { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: do the thing' }
 
 test('a PR already merged on GitHub with no local record is skipped for the next one', async () => {
   const { report, prompts, world, mergedLookups } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': MERGED_1 } })
@@ -370,7 +371,7 @@ test('a PR already merged on GitHub with no local record is skipped for the next
 })
 
 test('rebuilding an abandoned partially-merged design skips the PR already merged on GitHub', async () => {
-  const merged: Record<string, PullRequest | null> = {}
+  const merged: Record<string, MergedPullRequest | null> = {}
   const { repo, report, world, workshop } = await buildPr({ design: TWO_PRS, merged })
   // PR 1 was built and merged in this first pass.
   assert.equal('branch' in report && report.branch, 'factory/001-first/pr-1')
@@ -393,6 +394,29 @@ test('a PR the store already records as merged is not re-checked against GitHub'
   assert.deepEqual(await build(), { state: 'all PRs merged' })
   // Selecting past a store-merged PR reads the store, adding no GitHub lookup.
   assert.equal(mergedLookups.length, before)
+})
+
+test('a merged PR whose title no longer matches the rewritten plan stops for the owner', async () => {
+  // PR 1's branch is merged on GitHub under an old title; the plan was rewritten so PR 1 is now different work.
+  const stale: MergedPullRequest = { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: the old plan 1' }
+  const { report, prompts } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': stale } })
+  assert.equal(report.state, 'stopped')
+  assert.match(report.state === 'stopped' ? report.reason : '', /was rewritten after that PR merged/)
+  // Nothing was built, and PR 1 was not silently recorded as done.
+  assert.equal(prompts.length, 0)
+})
+
+test('an already-merged last PR stops for the owner instead of looping on a design never moved to done', async () => {
+  // Both PRs of a (shortened) plan are already merged on GitHub, so the design was never moved to factory/done.
+  const merged = {
+    'factory/001-first/pr-1': { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: do the thing' },
+    'factory/001-first/pr-2': { number: 17, url: 'https://github.com/owner/app/pull/17', title: 'feature: do the next thing' },
+  }
+  const { report, design } = await buildPr({ design: TWO_PRS, merged })
+  assert.equal(report.state, 'stopped')
+  assert.match(report.state === 'stopped' ? report.reason : '', /still in factory\/ready/)
+  // The design loop sees a stop, not 'all PRs merged', so it will not finish-and-reclaim forever.
+  assert.equal((await design()).state, 'stopped')
 })
 
 test('a PR that comes through the gate clean is opened into the base branch under its plan title', async () => {
