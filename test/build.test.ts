@@ -13,9 +13,10 @@ import { watchPr } from '../lib/review.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildDesign, buildNextPr } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
-import type { BreakFinding, ExcessFinding, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
+import type { BreakFinding, ExcessFinding, MergedPullRequest, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
 import type { Claim, FixWave, Implementation, PrReport, ReviewWave } from '../lib/store.ts'
+import type { PlannedPr } from '../lib/types.ts'
 
 const GB = 1024 ** 3
 
@@ -32,22 +33,41 @@ function pinFloor(t: import('node:test').TestContext, gb: string) {
   })
 }
 
-function addDesign(repo: string, name: string, planned: boolean) {
-  const dir = path.join(repo, 'factory', 'ready', name)
-  fs.mkdirSync(path.join(dir, 'screenshots'), { recursive: true })
-  fs.writeFileSync(path.join(dir, 'screenshots', 'a--default.png'), 'png')
-  fs.writeFileSync(path.join(dir, 'Design.md'), '![a](screenshots/a--default.png)\n\n## Done when\n\n- [ ] first outcome\n')
-  if (!planned) return
-  recordApprovedPlan(repo, readDesign(repo, name.slice(0, 3)), {
-    summary: 'summary',
-    prs: [{ number: 1, title: 'feature: do the thing', goal: 'goal', changes: ['c'], tests: ['t'], dependsOn: [], screenshots: ['a--default.png'], doneWhen: [1], hard: false }],
-  })
+const ONE_PR: PlannedPr[] = [{ number: 1, title: 'feature: do the thing', goal: 'goal', changes: ['c'], tests: ['t'], dependsOn: [], screenshots: ['a--default.png'], doneWhen: [1], hard: false }]
+
+// A two-PR plan over a design with two checklist items and two screenshots, one assigned to each PR.
+const TWO_PRS: DesignOptions = {
+  screenshots: ['a--default.png', 'b--default.png'],
+  doneWhen: ['first outcome', 'second outcome'],
+  prs: [
+    { number: 1, title: 'feature: do the thing', goal: 'goal', changes: ['c'], tests: ['t'], dependsOn: [], screenshots: ['a--default.png'], doneWhen: [1], hard: false },
+    { number: 2, title: 'feature: do the next thing', goal: 'goal', changes: ['c'], tests: ['t'], dependsOn: [1], screenshots: ['b--default.png'], doneWhen: [2], hard: false },
+  ],
 }
 
-function setup(designs: [string, boolean][], branches: string[] = []) {
+interface DesignOptions {
+  screenshots?: string[]
+  doneWhen?: string[]
+  prs?: PlannedPr[]
+}
+
+function addDesign(repo: string, name: string, planned: boolean, design: DesignOptions = {}) {
+  const screenshots = design.screenshots ?? ['a--default.png']
+  const doneWhen = design.doneWhen ?? ['first outcome']
+  const dir = path.join(repo, 'factory', 'ready', name)
+  fs.mkdirSync(path.join(dir, 'screenshots'), { recursive: true })
+  for (const shot of screenshots) fs.writeFileSync(path.join(dir, 'screenshots', shot), 'png')
+  const images = screenshots.map((shot) => `![${shot}](screenshots/${shot})`).join('\n')
+  const checklist = doneWhen.map((item) => `- [ ] ${item}`).join('\n')
+  fs.writeFileSync(path.join(dir, 'Design.md'), `${images}\n\n## Done when\n\n${checklist}\n`)
+  if (!planned) return
+  recordApprovedPlan(repo, readDesign(repo, name.slice(0, 3)), { summary: 'summary', prs: design.prs ?? ONE_PR })
+}
+
+function setup(designs: [string, boolean][], branches: string[] = [], design: DesignOptions = {}) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-build-'))
   fs.mkdirSync(path.join(repo, 'factory', 'ready'), { recursive: true })
-  for (const [name, planned] of designs) addDesign(repo, name, planned)
+  for (const [name, planned] of designs) addDesign(repo, name, planned, design)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-'))
   const world: World = {
     store: diskStore(home),
@@ -232,8 +252,8 @@ test('uninstall removes the factory command linked into this repository', () => 
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean } = {}) {
-  const { repo, world, events } = setup([['001-first', true]])
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; design?: DesignOptions; merged?: Record<string, MergedPullRequest | null> } = {}) {
+  const { repo, world, events } = setup([['001-first', true]], [], options.design)
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
   if (started.state !== 'started') throw new Error('not started')
@@ -243,6 +263,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const fixPrompts: string[] = []
   let audits = 0
   const opened: { branch: string; base: string; title: string; body: string }[] = []
+  const mergedLookups: string[] = []
   // Each look at GitHub sees the next state; the last one repeats. With none given, the owner has approved.
   const github = [...(options.github ?? [{ approved: true }])]
   const reviewPrompts: string[] = []
@@ -281,10 +302,15 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     commitMessages: () => options.commits ?? ['add the thing'],
     uncommittedFiles: () => options.uncommitted ?? [],
     markDesignBuilt: () => steps.push('design marked built') === 1,
+    designAwaitingDone: (design) => fs.existsSync(path.join(repo, 'factory', 'ready', design)),
     openPullRequest: (_worktree, branch, base, title, body) => {
       steps.push('opened')
       opened.push({ branch, base, title, body })
       return { number: 7, url: 'https://github.com/owner/app/pull/7' }
+    },
+    mergedPullRequest: (branch) => {
+      mergedLookups.push(branch)
+      return options.merged?.[branch] ?? null
     },
     evidenceStamp: () => (options.reRecords ? head : 'same'),
     publishEvidence: () => void (did.evidencePosts += 1),
@@ -311,7 +337,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     wait: async () => void (did.waits += 1),
   }
   const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop)
-  return { repo, report: await build(), build, prompts, merges, events, world, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop) }
+  return { repo, report: await build(), build, prompts, merges, events, world, workshop, mergedLookups, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -327,6 +353,86 @@ test('once every PR is merged nothing more is run', async () => {
   const { build, prompts, reviews, opened } = await buildPr()
   assert.deepEqual(await build(), { state: 'all PRs merged' })
   assert.deepEqual([prompts.length, reviews.length, opened.length], [1, 1, 1])
+})
+
+// The merged PR carries the title the factory opened it under — PR 1's planned title in the two-PR plan.
+const MERGED_1: MergedPullRequest = { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: do the thing' }
+
+test('a PR already merged on GitHub with no local record is skipped for the next one', async () => {
+  const { report, prompts, world, mergedLookups } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': MERGED_1 } })
+  assert.equal('branch' in report && report.branch, 'factory/001-first/pr-2')
+  assert.match(prompts[0], /PR 2, "feature: do the next thing"/)
+  // The implementer only ran for PR 2; PR 1 was never rebuilt.
+  assert.equal(prompts.length, 1)
+  // GitHub was asked about PR 1's deleted branch, and the merge was written back so the store now knows it.
+  assert.ok(mergedLookups.includes('factory/001-first/pr-1'))
+  const recorded = world.store.prReport('owner/app', 1)
+  assert.equal(recorded?.review?.state, 'merged')
+  assert.equal(recorded?.pullRequest?.number, 16)
+})
+
+test('rebuilding an abandoned partially-merged design skips the PR already merged on GitHub', async () => {
+  const merged: Record<string, MergedPullRequest | null> = {}
+  const { repo, report, world, workshop } = await buildPr({ design: TWO_PRS, merged })
+  // PR 1 was built and merged in this first pass.
+  assert.equal('branch' in report && report.branch, 'factory/001-first/pr-1')
+  assert.equal('review' in report && report.review?.state, 'merged')
+  // The owner rewrote the plan and abandoned the design, wiping the store; PR 1 stays merged on GitHub, branch gone.
+  assert.equal(abandon(world).state, 'abandoned')
+  merged['factory/001-first/pr-1'] = MERGED_1
+  // Rebuilding re-claims the design with an empty store, then advances past the merged PR 1 to PR 2.
+  const again = startOrResume(repo, world, 'feature/x')
+  assert.equal(again.state, 'started')
+  if (again.state !== 'started') throw new Error('not started')
+  const next = await buildNextPr(again.claim.prs, again.claim, world, workshop)
+  assert.equal('branch' in next && next.branch, 'factory/001-first/pr-2')
+  assert.equal(world.store.prReport('owner/app', 1)?.review?.state, 'merged')
+})
+
+test('a PR the store already records as merged is not re-checked against GitHub', async () => {
+  const { build, mergedLookups } = await buildPr()
+  const before = mergedLookups.length
+  assert.deepEqual(await build(), { state: 'all PRs merged' })
+  // Selecting past a store-merged PR reads the store, adding no GitHub lookup.
+  assert.equal(mergedLookups.length, before)
+})
+
+test('a merged PR whose title no longer matches the rewritten plan stops for the owner', async () => {
+  // PR 1's branch is merged on GitHub under an old title; the plan was rewritten so PR 1 is now different work.
+  const stale: MergedPullRequest = { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: the old plan 1' }
+  const { report, prompts } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': stale } })
+  assert.equal(report.state, 'stopped')
+  assert.match(report.state === 'stopped' ? report.reason : '', /was rewritten after that PR merged/)
+  // Nothing was built, and PR 1 was not silently recorded as done.
+  assert.equal(prompts.length, 0)
+})
+
+test('an already-merged last PR stops for the owner instead of looping on a design never moved to done', async () => {
+  // Both PRs of a (shortened) plan are already merged on GitHub, so the design was never moved to factory/done.
+  const merged = {
+    'factory/001-first/pr-1': { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: do the thing' },
+    'factory/001-first/pr-2': { number: 17, url: 'https://github.com/owner/app/pull/17', title: 'feature: do the next thing' },
+  }
+  const { report, design } = await buildPr({ design: TWO_PRS, merged })
+  assert.equal(report.state, 'stopped')
+  assert.match(report.state === 'stopped' ? report.reason : '', /still in factory\/ready/)
+  // The design loop sees a stop, not 'all PRs merged', so it will not finish-and-reclaim forever.
+  assert.equal((await design()).state, 'stopped')
+})
+
+test('once the owner moves a fully-merged design to factory/done, the recovery finishes instead of looping', async () => {
+  const merged = {
+    'factory/001-first/pr-1': { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: do the thing' },
+    'factory/001-first/pr-2': { number: 17, url: 'https://github.com/owner/app/pull/17', title: 'feature: do the next thing' },
+  }
+  const { repo, report, build } = await buildPr({ design: TWO_PRS, merged })
+  // While the design is still in factory/ready the recovery stops for the owner.
+  assert.equal(report.state, 'stopped')
+  // The owner moves it to factory/done on the base, as the stop asked.
+  fs.mkdirSync(path.join(repo, 'factory', 'done'), { recursive: true })
+  fs.renameSync(path.join(repo, 'factory', 'ready', '001-first'), path.join(repo, 'factory', 'done', '001-first'))
+  // Resuming the saved claim now finishes cleanly instead of hitting the same stop forever.
+  assert.deepEqual(await build(), { state: 'all PRs merged' })
 })
 
 test('a PR that comes through the gate clean is opened into the base branch under its plan title', async () => {
