@@ -270,8 +270,8 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const replies: { id: string; body: string; resolved: boolean }[] = []
   const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, evidencePosts: 0, discarded: null as null | { worktree: string; branch: string; base: string } }
   const steps: string[] = []
-  // Each publish finds the next recording; the last one repeats. With none given, the PR has no evidence.
-  const evidence = [...(options.evidence ?? [null])]
+  // Each publish finds the next recording; with none left, the PR has no evidence.
+  const evidence = [...(options.evidence ?? [])]
   let head = 'abc'
   const workshop: Workshop = {
     prepareWorktree: () => options.worktree ?? repo,
@@ -318,7 +318,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     publishEvidence: () => {
       did.evidencePosts += 1
       steps.push('evidence published')
-      return evidence.length > 1 ? evidence.shift()! : evidence[0]
+      return evidence.shift() ?? null
     },
     pullRequestState: () => ({ state: 'open', head, approved: false, conflicts: false, checks: 'passed', failedChecks: [], greptileScore: null, items: [], ...(github.length > 1 ? github.shift() : github[0]) }),
     answerReview: async (_worktree, prompt) => {
@@ -777,16 +777,10 @@ const RECORDING: PublishedEvidence = {
   files: [{ file: 'demo.mp4', kind: 'functional', caption: 'Saving a show', url: 'https://github.com/user-attachments/assets/v1' }],
 }
 
-test("evidence is posted once the PR is open and its addresses are kept in the PR's report", async () => {
-  const { world, steps } = await buildPr({ github: [{}, { state: 'closed' }], evidence: [RECORDING] })
-  assert.equal(steps[steps.indexOf('opened') + 1], 'evidence published')
+test("evidence is posted once the PR is open, kept in the PR's report, and posted before the worktree is discarded", async () => {
+  const { world, steps } = await buildPr({ evidence: [RECORDING] })
+  assert.deepEqual(steps.filter((step) => ['opened', 'evidence published', 'discarded'].includes(step)), ['opened', 'evidence published', 'discarded'])
   assert.deepEqual(world.store.prReport('owner/app', 1)?.evidence, RECORDING)
-})
-
-test('evidence is posted before the merged worktree and its scratch folder are discarded', async () => {
-  const { steps } = await buildPr({ evidence: [RECORDING] })
-  assert.notEqual(steps.indexOf('evidence published'), -1)
-  assert.ok(steps.indexOf('evidence published') < steps.indexOf('discarded'))
 })
 
 test('a PR with no evidence is opened and merged with no evidence in its report', async () => {

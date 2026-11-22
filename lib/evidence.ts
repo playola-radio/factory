@@ -14,12 +14,17 @@ const HOSTED = /https:\/\/github\.com\/user-attachments\/(?:assets|files)\/[\w.-
 // Where an implementer working with `TMPDIR` set to `scratch` saves its recordings and their manifest.
 export const evidenceDir = (scratch: string) => path.join(scratch, 'evidence')
 
-// The manifest's text plus every file's modification time, so it changes whenever evidence is recorded again.
+// The manifest's text plus each listed file's modification time, so it changes whenever evidence is recorded again.
 export function evidenceStampOf(dir: string): string {
   const manifest = path.join(dir, MANIFEST)
   if (!fs.existsSync(manifest)) return ''
-  const files = fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => path.join(entry.parentPath, entry.name))
-  return [fs.readFileSync(manifest, 'utf8'), ...files.sort().map((file) => `${file} ${fs.statSync(file).mtimeMs}`)].join('\n')
+  let times: number[] = []
+  try {
+    times = readManifest(dir).map(({ file }) => fs.statSync(path.join(dir, file)).mtimeMs)
+  } catch {
+    // An invalid manifest is stamped by its text alone; publishing it reports what is wrong.
+  }
+  return [fs.readFileSync(manifest, 'utf8'), ...times].join('\n')
 }
 
 function readManifest(dir: string): EvidenceFile[] {
@@ -39,8 +44,9 @@ function readManifest(dir: string): EvidenceFile[] {
     // Anything else (a space, a bracket) breaks the Markdown link GitHub rewrites, which would misplace hosted addresses.
     if (!/^[\w./-]+$/.test(entry.file)) throw new Error(`${manifest} names ${JSON.stringify(entry.file)}; use only letters, digits, dots, dashes and underscores.`)
     const full = path.resolve(dir, entry.file)
-    if (!full.startsWith(path.resolve(dir) + path.sep)) throw new Error(`${manifest} names ${entry.file}, which is outside ${dir}.`)
     if (!fs.existsSync(full)) throw new Error(`${manifest} names ${entry.file}, which is not in ${dir}.`)
+    // Resolved through symlinks, so a link to a private file elsewhere on the machine is never uploaded.
+    if (!fs.realpathSync(full).startsWith(fs.realpathSync(dir) + path.sep)) throw new Error(`${manifest} names ${entry.file}, which is outside ${dir}.`)
     return { file: entry.file, kind: entry.kind, caption: entry.caption }
   })
 }

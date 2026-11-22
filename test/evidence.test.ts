@@ -79,10 +79,15 @@ test('a manifest naming a file that was never recorded fails before posting', ()
   assert.equal(github.posts.length, 0)
 })
 
-test('a manifest naming a file outside the evidence folder fails before posting', () => {
+test('a manifest naming a file outside the evidence folder, directly or through a link, fails before posting', () => {
   const github = fakeGitHub()
-  const manifest = { files: [{ file: '../secret.png', kind: 'visual', caption: 'x' }] }
-  assert.throws(() => publishEvidenceFiles(scratch(manifest), github.post), /outside/)
+  const secret = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-secret-')), 'secret.png')
+  fs.writeFileSync(secret, 'private')
+  const dir = scratch({ files: [{ file: `../${path.basename(path.dirname(secret))}/secret.png`, kind: 'visual', caption: 'x' }] })
+  assert.throws(() => publishEvidenceFiles(dir, github.post), /outside/)
+  const linked = scratch({ files: [{ file: 'secret.png', kind: 'visual', caption: 'x' }] })
+  fs.symlinkSync(secret, path.join(linked, 'secret.png'))
+  assert.throws(() => publishEvidenceFiles(linked, github.post), /outside/)
   assert.equal(github.posts.length, 0)
 })
 
