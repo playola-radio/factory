@@ -600,8 +600,9 @@ const OWNER_THREAD: ReviewItem = { id: 'T2', kind: 'thread', latest: 'c1', fromO
 const OWNER_COMMENT: ReviewItem = { id: 'comment-5', kind: 'comment', latest: 'c1', fromOwner: true, text: 'Rename the button please' }
 
 test('an approved PR with passing checks is merged, and the design goes on until every PR is merged', async () => {
-  const { report, did, design } = await buildPr()
+  const { report, did, design, world } = await buildPr()
   assert.equal(reviewState(report), 'merged')
+  assert.equal(world.store.prReport('owner/app', 1)?.evidence, undefined)
   assert.equal(did.merged, 1)
   assert.deepEqual(await design(), { state: 'all PRs merged' })
 })
@@ -781,12 +782,6 @@ test("evidence is posted once the PR is open, kept in the PR's report, and poste
   const { world, steps } = await buildPr({ evidence: [RECORDING] })
   assert.deepEqual(steps.filter((step) => ['opened', 'evidence published', 'discarded'].includes(step)), ['opened', 'evidence published', 'discarded'])
   assert.deepEqual(world.store.prReport('owner/app', 1)?.evidence, RECORDING)
-})
-
-test('a PR with no evidence is opened and merged with no evidence in its report', async () => {
-  const { report, world } = await buildPr()
-  assert.equal(reviewState(report), 'merged')
-  assert.equal(world.store.prReport('owner/app', 1)?.evidence, undefined)
 })
 
 test('evidence recorded again during a fix replaces the addresses kept in the report', async () => {

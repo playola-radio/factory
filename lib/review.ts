@@ -116,7 +116,10 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     if (pushed) workshop.push(worktree, branch)
     // Not tied to a push: a round that only records a requested demo changes no tracked file.
     const evidence = workshop.evidenceStamp(worktree) !== recorded ? workshop.publishEvidence(worktree, number) : null
-    if (evidence) report = { ...report, evidence }
+    if (evidence) {
+      report = { ...report, evidence }
+      save()
+    }
     for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
     if (pushed && github.greptileScore !== null && github.greptileScore < RE_REVIEW_BELOW) workshop.requestReview(number)
     review = { ...review, answered: [...review.answered, ...items.filter((item) => item.kind === 'comment').map((item) => item.id)] }

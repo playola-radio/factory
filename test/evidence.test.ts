@@ -51,19 +51,14 @@ test('a manifest that lists no files posts nothing', () => {
   assert.equal(github.posts.length, 0)
 })
 
-test('every file in the manifest is attached to one comment, captioned in manifest order', () => {
+test('every file in the manifest is attached to one comment, captioned in manifest order, and returned with its hosted address', () => {
   const github = fakeGitHub()
   const dir = scratch(MANIFEST, ['demo.mp4', 'shots/empty.png'])
-  publishEvidenceFiles(dir, github.post)
+  const published = publishEvidenceFiles(dir, github.post)
   assert.equal(github.posts.length, 1)
   const [{ body, attachments }] = github.posts
   assert.deepEqual(attachments, [path.join(dir, 'demo.mp4'), path.join(dir, 'shots/empty.png')])
   assert.match(body, /Saving a new show from start to finish[\s\S]*!\[\]\(\.\/demo\.mp4\)[\s\S]*The empty schedule[\s\S]*!\[The empty schedule\]\(\.\/shots\/empty\.png\)/)
-})
-
-test('the hosted address of every file is returned with the comment', () => {
-  const github = fakeGitHub()
-  const published = publishEvidenceFiles(scratch(MANIFEST, ['demo.mp4', 'shots/empty.png']), github.post)
   assert.deepEqual(published, {
     comment: COMMENT_URL,
     files: [
