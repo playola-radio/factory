@@ -778,6 +778,14 @@ const RECORDING: PublishedEvidence = {
   files: [{ file: 'demo.mp4', kind: 'functional', caption: 'Saving a show', url: 'https://github.com/user-attachments/assets/v1' }],
 }
 
+test('evidence from a failed review round is posted and saved before the round stops', async () => {
+  const again = { ...RECORDING, comment: 'https://github.com/owner/app/pull/7#issuecomment-2' }
+  const { report, did, world } = await buildPr({ github: [{ items: [OWNER_THREAD] }], reRecords: true, evidence: [RECORDING, again], answer: { checks: [{ command: 'npm test', passed: false }] } })
+  assert.equal(reviewState(report), 'fix failed')
+  assert.equal(did.evidencePosts, 2)
+  assert.deepEqual(world.store.prReport('owner/app', 1)?.evidence, again)
+})
+
 test("evidence is posted once the PR is open, kept in the PR's report, and posted before the worktree is discarded", async () => {
   const { world, steps } = await buildPr({ evidence: [RECORDING] })
   assert.deepEqual(steps.filter((step) => ['opened', 'evidence published', 'discarded'].includes(step)), ['opened', 'evidence published', 'discarded'])

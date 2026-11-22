@@ -9,7 +9,7 @@ export type EvidencePost = (body: string, attachments: string[]) => { url: strin
 
 const MANIFEST = 'evidence.json'
 const KINDS = ['functional', 'visual']
-const HOSTED = /https:\/\/github\.com\/user-attachments\/(?:assets|files)\/[\w.-]+/g
+const HOSTED = /^(https:\/\/github\.com\/user-attachments\/(?:assets|files)\/[\w.-]+)\)/
 
 // Where an implementer working with `TMPDIR` set to `scratch` saves its recordings and their manifest.
 export const evidenceDir = (scratch: string) => path.join(scratch, 'evidence')
@@ -64,7 +64,17 @@ export function publishEvidenceFiles(dir: string, post: EvidencePost): Published
   const files = readManifest(dir)
   if (files.length === 0) return null
   const posted = post(comment(files), files.map(({ file }) => path.join(dir, file)))
-  const urls = posted.body.match(HOSTED) ?? []
+  let offset = 0
+  const urls = files.flatMap(({ file, kind, caption }) => {
+    const prefix = `**${caption}** (${kind})\n\n![${isVideo(file) ? '' : caption}](`
+    const start = posted.body.indexOf(prefix, offset)
+    if (start < 0) return []
+    offset = start + prefix.length
+    const match = HOSTED.exec(posted.body.slice(offset))
+    if (!match) return []
+    offset += match[0].length
+    return [match[1]]
+  })
   if (urls.length !== files.length) {
     throw new Error(`GitHub hosted ${urls.length} of the ${files.length} evidence files posted in ${posted.url}.`)
   }

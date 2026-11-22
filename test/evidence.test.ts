@@ -104,6 +104,13 @@ test('GitHub not hosting every attachment is reported instead of storing wrong a
   assert.throws(() => publishEvidenceFiles(scratch(MANIFEST, ['demo.mp4', 'shots/empty.png']), post), /issuecomment-99/)
 })
 
+test('attachment URLs in captions do not count as uploaded files', () => {
+  const caption = 'Compare https://github.com/user-attachments/assets/old with this'
+  const manifest = { files: [{ file: 'shot.png', kind: 'visual', caption }] }
+  const published = publishEvidenceFiles(scratch(manifest, ['shot.png']), fakeGitHub().post)
+  assert.equal(published?.files[0].url, 'https://github.com/user-attachments/assets/a1')
+})
+
 test('the evidence stamp is empty with no manifest and changes when a file is recorded again', () => {
   assert.equal(evidenceStampOf(scratch()), '')
   const dir = scratch(MANIFEST, ['demo.mp4', 'shots/empty.png'])
