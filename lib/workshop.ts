@@ -56,6 +56,10 @@ export interface Workshop {
   // Moves the design to factory/done in one commit; false when it is already there.
   markDesignBuilt(worktree: string, design: string): boolean
   openPullRequest(worktree: string, branch: string, base: string, title: string, body: string): PullRequest
+  // The pull request GitHub still shows as merged into `base` from this head branch, or null. Found even after the
+  // branch is deleted on merge (GitHub keeps the PR by its head ref), so an already-merged PR is recognised when the
+  // local store has lost track of it.
+  mergedPullRequest(branch: string, base: string): PullRequest | null
   // Changes whenever evidence is recorded again.
   evidenceStamp(worktree: string): string
   publishEvidence(worktree: string, number: number): void
@@ -188,6 +192,10 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       const pullRequest = { number: Number(url.split('/').pop()), url }
       this.publishEvidence(worktree, pullRequest.number)
       return pullRequest
+    },
+    mergedPullRequest(branch, base) {
+      const rows = JSON.parse(gh('pr', 'list', '-R', repoId, '--head', branch, '--base', base, '--state', 'merged', '--json', 'number,url')) as PullRequest[]
+      return rows[0] ?? null
     },
     evidenceStamp(worktree) {
       const artifacts = path.join(worktree, '.qa-artifacts')

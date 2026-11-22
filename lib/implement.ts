@@ -7,7 +7,7 @@ import { runGate } from './gate.ts'
 import { watchPr } from './review.ts'
 import { designValues, renderPrompt } from './prompts.ts'
 import { readApprovedPlan } from './readiness.ts'
-import type { Claim, Implementation, PrReport } from './store.ts'
+import type { Claim, Implementation, PrReport, PullRequest } from './store.ts'
 import type { PlannedPr } from './types.ts'
 import { branchProblems, planIsIntact } from './workshop.ts'
 import type { Workshop } from './workshop.ts'
@@ -70,6 +70,18 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
 
   ensureDiskSpace(world, claim.design)
   const branch = `${branchPrefix(claim.design)}pr-${pr.number}`
+  // A PR with no local record may still be merged into the base on GitHub — e.g. the design was abandoned (which
+  // wipes the store) and rebuilt, or the store was lost or moved. Its head branch is deleted on merge, so neither the
+  // store nor the remote branch list signals it; only the merged PR GitHub keeps by head ref does. Record the
+  // discovery so the next pass reads it from the store instead of asking GitHub again, then move on to the next PR.
+  if (!previous) {
+    const merged = workshop.mergedPullRequest(branch, claim.base)
+    if (merged) {
+      world.store.savePrReport(claim.repo, mergedReport(pr.number, branch, merged))
+      world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type: 'pr merged' })
+      return buildNextPr(prs, claim, world, workshop)
+    }
+  }
   const worktree = workshop.prepareWorktree(claim.base, branch)
   const merge = previous ? workshop.mergeBase(worktree, claim.base) : null
   const number = claim.design.slice(0, 3)
@@ -110,6 +122,23 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   world.store.savePrReport(claim.repo, report)
   world.store.record({ ...event, at: world.now(), type: `pr ${report.state}` })
   return report.state === 'implemented' ? gate(report) : report
+}
+
+// A stand-in report for a PR found already merged on GitHub with no local record, so the store treats it as done
+// (and does not re-query GitHub) from here on. Its worktree is gone with the merged branch, so it carries none.
+function mergedReport(number: number, branch: string, pullRequest: PullRequest): PrReport {
+  return {
+    state: 'implemented',
+    number,
+    attempts: 0,
+    branch,
+    worktree: '',
+    commits: [],
+    problems: [],
+    implementation: { status: 'done', summary: 'Already merged on GitHub before this build; its branch is gone.', checks: [], blockers: [] },
+    pullRequest,
+    review: { state: 'merged', rounds: [], answered: [], problems: [] },
+  }
 }
 
 function pullRequestBody(report: PrReport, design: string, number: number, total: number): string {
