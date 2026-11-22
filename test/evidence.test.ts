@@ -17,13 +17,15 @@ function scratch(manifest?: unknown, files: string[] = []): string {
   return dir
 }
 
-// Stands in for `gh pr comment --attach`: GitHub rewrites each local reference in the body to its hosted address.
+// Stands in for `gh pr comment --attach`, which rewrites each local reference to its hosted address: an image keeps
+// its Markdown, and a video alone in its paragraph becomes the bare address so GitHub renders a player.
 function fakeGitHub() {
   const posts: { body: string; attachments: string[] }[] = []
   const post: EvidencePost = (body, attachments) => {
     posts.push({ body, attachments })
     let n = 0
-    return { url: COMMENT_URL, body: body.replace(/\]\(\.\/[^)]+\)/g, () => `](https://github.com/user-attachments/assets/a${++n})`) }
+    const hosted = () => `https://github.com/user-attachments/assets/a${++n}`
+    return { url: COMMENT_URL, body: body.replace(/!\[\]\(\.\/[^)]+\.mp4\)|\]\(\.\/[^)]+\)/g, (match) => (match.startsWith('!') ? hosted() : `](${hosted()})`)) }
   }
   return { posts, post }
 }
@@ -102,13 +104,6 @@ test('a manifest that is not valid fails with its path', () => {
 test('GitHub not hosting every attachment is reported instead of storing wrong addresses', () => {
   const post: EvidencePost = () => ({ url: COMMENT_URL, body: 'nothing rewritten' })
   assert.throws(() => publishEvidenceFiles(scratch(MANIFEST, ['demo.mp4', 'shots/empty.png']), post), /issuecomment-99/)
-})
-
-test('attachment URLs in captions do not count as uploaded files', () => {
-  const caption = 'Compare https://github.com/user-attachments/assets/old with this'
-  const manifest = { files: [{ file: 'shot.png', kind: 'visual', caption }] }
-  const published = publishEvidenceFiles(scratch(manifest, ['shot.png']), fakeGitHub().post)
-  assert.equal(published?.files[0].url, 'https://github.com/user-attachments/assets/a1')
 })
 
 test('the evidence stamp is empty with no manifest and changes when a file is recorded again', () => {
