@@ -49,8 +49,10 @@ repo documents.
      taps that save. … Make whatever **staging data** the flow needs to show a realistic
      screen."
    - *after:* "…carries those items out from start to finish **against the app brought up per
-     the repo's `factory/DEMO.md` (its safe local demo environment)**, including the taps that
+     the repo's `factory/DEMO.md` (its safe demo environment)**, including the taps that
      save. … **Use the realistic data that demo environment provides** to show a real screen."
+     ("safe demo environment", not "safe *local* demo environment": the prompt must not
+     mis-direct staging repos, which `factory/DEMO.md` grandfathers — per Greptile on PR #15.)
    Everything else on the line (functional vs visual, "name any item the recording does not
    show") is unchanged.
 2. **Convention:** each watched repo carries **`factory/DEMO.md`** in its root `factory/`
