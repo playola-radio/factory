@@ -302,6 +302,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     commitMessages: () => options.commits ?? ['add the thing'],
     uncommittedFiles: () => options.uncommitted ?? [],
     markDesignBuilt: () => steps.push('design marked built') === 1,
+    designAwaitingDone: (design) => fs.existsSync(path.join(repo, 'factory', 'ready', design)),
     openPullRequest: (_worktree, branch, base, title, body) => {
       steps.push('opened')
       opened.push({ branch, base, title, body })
@@ -417,6 +418,21 @@ test('an already-merged last PR stops for the owner instead of looping on a desi
   assert.match(report.state === 'stopped' ? report.reason : '', /still in factory\/ready/)
   // The design loop sees a stop, not 'all PRs merged', so it will not finish-and-reclaim forever.
   assert.equal((await design()).state, 'stopped')
+})
+
+test('once the owner moves a fully-merged design to factory/done, the recovery finishes instead of looping', async () => {
+  const merged = {
+    'factory/001-first/pr-1': { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: do the thing' },
+    'factory/001-first/pr-2': { number: 17, url: 'https://github.com/owner/app/pull/17', title: 'feature: do the next thing' },
+  }
+  const { repo, report, build } = await buildPr({ design: TWO_PRS, merged })
+  // While the design is still in factory/ready the recovery stops for the owner.
+  assert.equal(report.state, 'stopped')
+  // The owner moves it to factory/done on the base, as the stop asked.
+  fs.mkdirSync(path.join(repo, 'factory', 'done'), { recursive: true })
+  fs.renameSync(path.join(repo, 'factory', 'ready', '001-first'), path.join(repo, 'factory', 'done', '001-first'))
+  // Resuming the saved claim now finishes cleanly instead of hitting the same stop forever.
+  assert.deepEqual(await build(), { state: 'all PRs merged' })
 })
 
 test('a PR that comes through the gate clean is opened into the base branch under its plan title', async () => {

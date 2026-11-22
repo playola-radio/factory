@@ -59,6 +59,9 @@ export interface Workshop {
   uncommittedFiles(worktree: string): string[]
   // Moves the design to factory/done in one commit; false when it is already there.
   markDesignBuilt(worktree: string, design: string): boolean
+  // Whether the design still sits in factory/ready on the base, so its move to factory/done is still owed. A design
+  // whose PRs are all merged but that is still in factory/ready was never moved by a last-PR build and needs the owner.
+  designAwaitingDone(design: string): boolean
   openPullRequest(worktree: string, branch: string, base: string, title: string, body: string): PullRequest
   // The pull request GitHub still shows as merged into `base` from this head branch, or null. Found even after the
   // branch is deleted on merge (GitHub keeps the PR by its head ref), so an already-merged PR is recognised when the
@@ -187,6 +190,8 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
       execFileSync('git', ['-C', worktree, 'commit', '-m', `chore: mark design ${design} as built`], { env: { ...process.env, ...AUTHOR_ENV } })
       return true
     },
+    // baseView keeps worktreesDir/base checked out to origin/base, so this reflects whether base still holds the design in ready.
+    designAwaitingDone: (design) => fs.existsSync(path.join(worktreesDir, 'base', 'factory', 'ready', design)),
     openPullRequest(worktree, branch, base, title, body) {
       const options = asAuthor(worktree)
       const gh = (...args: string[]) => execFileSync('gh', args, options).trim()
