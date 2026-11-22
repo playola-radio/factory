@@ -247,7 +247,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
   const github = [...(options.github ?? [{ approved: true }])]
   const reviewPrompts: string[] = []
   const replies: { id: string; body: string; resolved: boolean }[] = []
-  const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, evidencePosts: 0 }
+  const did = { pushed: 0, reReviews: 0, merged: 0, mergedHeads: [] as (string | undefined)[], waits: 0, evidencePosts: 0, discarded: null as null | { worktree: string; branch: string; base: string } }
   const steps: string[] = []
   let head = 'abc'
   const workshop: Workshop = {
@@ -303,6 +303,10 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     merge: (_number, observedHead?: string) => {
       did.merged += 1
       did.mergedHeads.push(observedHead)
+    },
+    discardWorktree: (worktree, branch, base) => {
+      did.discarded = { worktree, branch, base }
+      steps.push('discarded')
     },
     wait: async () => void (did.waits += 1),
   }
@@ -490,6 +494,27 @@ test('an approved PR with passing checks is merged, and the design goes on until
   assert.deepEqual(await design(), { state: 'all PRs merged' })
 })
 
+test("a merged PR's worktree is discarded", async () => {
+  const { repo, did } = await buildPr()
+  assert.deepEqual(did.discarded, { worktree: repo, branch: 'factory/001-first/pr-1', base: 'feature/x' })
+})
+
+test('a PR closed without merging leaves its worktree alone', async () => {
+  const { did } = await buildPr({ github: [{ state: 'closed' }] })
+  assert.equal(did.discarded, null)
+})
+
+test('a PR already merged on GitHub still has its worktree discarded', async () => {
+  const { repo, did } = await buildPr({ github: [{ state: 'merged' }] })
+  assert.deepEqual(did.discarded, { worktree: repo, branch: 'factory/001-first/pr-1', base: 'feature/x' })
+})
+
+test("a merged PR's worktree is discarded only after the owner's open question is answered", async () => {
+  const { steps } = await buildPr({ github: [{ approved: true, items: [OWNER_THREAD] }], answerAction: 'answered' })
+  assert.ok(steps.indexOf(`eyes on ${OWNER_THREAD.id}`) < steps.indexOf('discarded'))
+  assert.notEqual(steps.indexOf('discarded'), -1)
+})
+
 test('an approved PR is merged only at the head that was observed', async () => {
   const { did } = await buildPr({ github: [{ approved: true }] })
   assert.deepEqual(did.mergedHeads, ['abc'])
@@ -515,10 +540,10 @@ test('an approved PR with a failing check gets the check fixed instead of being 
 })
 
 test("a bot's finding is fixed, pushed, answered in its thread, resolved, and reviewed again when the score was low", async () => {
-  const { report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptileScore: 0 }, { approved: true }] })
+  const { repo, report, did, replies, reviewPrompts } = await buildPr({ github: [{ items: [BOT_THREAD], greptileScore: 0 }, { approved: true }] })
   assert.match(reviewPrompts[0], /\*\*R1\*\* \[bot\] `App.swift:9`\n  > greptile-apps: this breaks a repo rule/)
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
-  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, evidencePosts: 0 })
+  assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, evidencePosts: 0, discarded: { worktree: repo, branch: 'factory/001-first/pr-1', base: 'feature/x' } })
   assert.equal(reviewState(report), 'merged')
 })
 
@@ -688,6 +713,7 @@ test('a nearly full disk does not stop an approved PR from merging and answering
     merge: () => { merged = true },
     answerReview: async () => { answered = true; return { summary: '', replies: [{ id: 'R1', action: 'answered' as const, reply: 'because' }], checks: [], blockers: [] } },
     reply: () => {},
+    discardWorktree: () => {},
     evidenceStamp: () => 'same',
   } as unknown as Workshop
   const report = { state: 'implemented', number: 1, attempts: 1, branch: 'factory/001-first/pr-1', worktree: repo, commits: [], problems: [], implementation: DONE, pullRequest: { number: 7, url: 'https://example/7' } } as PrReport
