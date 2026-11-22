@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 
 import type { EvidenceFile, PublishedEvidence } from './store.ts'
 
@@ -14,17 +15,20 @@ const HOSTED = /https:\/\/github\.com\/user-attachments\/(?:assets|files)\/[\w.-
 // Where an implementer working with `TMPDIR` set to `scratch` saves its recordings and their manifest.
 export const evidenceDir = (scratch: string) => path.join(scratch, 'evidence')
 
-// The manifest's text plus each listed file's modification time, so it changes whenever evidence is recorded again.
+// The manifest's text plus each file's modification time and contents, so re-recordings are detected.
 export function evidenceStampOf(dir: string): string {
   const manifest = path.join(dir, MANIFEST)
   if (!fs.existsSync(manifest)) return ''
-  let times: number[] = []
+  let stamps: string[] = []
   try {
-    times = readManifest(dir).map(({ file }) => fs.statSync(path.join(dir, file)).mtimeMs)
+    stamps = readManifest(dir).map(({ file }) => {
+      const full = path.join(dir, file)
+      return `${fs.statSync(full).mtimeMs}:${createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`
+    })
   } catch {
     // An invalid manifest is stamped by its text alone; publishing it reports what is wrong.
   }
-  return [fs.readFileSync(manifest, 'utf8'), ...times].join('\n')
+  return [fs.readFileSync(manifest, 'utf8'), ...stamps].join('\n')
 }
 
 function readManifest(dir: string): EvidenceFile[] {

@@ -113,3 +113,15 @@ test('the evidence stamp is empty with no manifest and changes when a file is re
   fs.utimesSync(path.join(dir, 'demo.mp4'), new Date(), new Date(Date.now() + 60_000))
   assert.notEqual(evidenceStampOf(dir), before)
 })
+
+test('the evidence stamp changes when file contents change with the same modification time', () => {
+  const dir = scratch(MANIFEST, ['demo.mp4', 'shots/empty.png'])
+  const file = path.join(dir, 'demo.mp4')
+  const time = new Date('2025-01-01T00:00:00Z')
+  fs.utimesSync(file, time, time)
+  const before = evidenceStampOf(dir)
+  assert.equal(evidenceStampOf(dir), before)
+  fs.writeFileSync(file, 'other recording')
+  fs.utimesSync(file, time, time)
+  assert.notEqual(evidenceStampOf(dir), before)
+})
