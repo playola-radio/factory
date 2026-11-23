@@ -32,6 +32,7 @@ export interface FactoryEvent {
     | 'pr implemented'
     | 'pr needs attention'
     | 'gate started'
+    | 'gate pass cached'
     | `gate ${GateReport['state']}`
     | 'pr opened'
     | 'review started'
@@ -135,6 +136,9 @@ export interface Store {
   release(repo: string): void
   prReport(repo: string, number: number): PrReport | null
   savePrReport(repo: string, report: PrReport): void
+  // A review pass's result, kept by the code, prompt and model it reviewed so a resumed gate does not pay for it twice.
+  gatePass<T>(repo: string, key: string): { findings: T[] } | null
+  saveGatePass<T>(repo: string, key: string, pass: { findings: T[] }): void
   // With a report, also keeps a copy of it as this event's artifact, until marge has accepted it.
   record(event: FactoryEvent, report?: PrReport): void
   eventLog(): string
@@ -165,6 +169,7 @@ export function diskStore(home: string): Store {
   const buildDir = (repo: string) => path.join(home, 'builds', repo.replaceAll('/', '__'))
   const claimFile = (repo: string) => path.join(buildDir(repo), 'claim.json')
   const prFile = (repo: string, number: number) => path.join(buildDir(repo), `pr-${number}.json`)
+  const gatePassFile = (repo: string, key: string) => path.join(buildDir(repo), 'gate-cache', `${key}.json`)
   const artifactFile = (id: string) => path.join(home, 'artifacts', `${id}.json`)
   const eventsFile = path.join(home, 'events.jsonl')
   const cursorFile = path.join(home, 'sync.json')
@@ -194,6 +199,16 @@ export function diskStore(home: string): Store {
     },
     savePrReport(repo, report) {
       fs.writeFileSync(prFile(repo, report.number), `${JSON.stringify(report, null, 2)}\n`)
+    },
+    gatePass(repo, key) {
+      const file = gatePassFile(repo, key)
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null
+    },
+    saveGatePass(repo, key, pass) {
+      const file = gatePassFile(repo, key)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(pass))
+      fs.renameSync(`${file}.tmp`, file)
     },
     record(event, report) {
       const id = randomUUID()

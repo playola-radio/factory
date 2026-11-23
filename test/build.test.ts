@@ -12,6 +12,7 @@ import { runGate } from '../lib/gate.ts'
 import { watchPr } from '../lib/review.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
 import { buildDesign, buildNextPr, pullRequestTitle } from '../lib/implement.ts'
+import { DEFAULT_MODEL } from '../lib/agents.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, MergedPullRequest, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
@@ -264,7 +265,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
-async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; evidence?: (PublishedEvidence | null)[]; design?: DesignOptions; merged?: Record<string, MergedPullRequest | null> } = {}) {
+async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails' | 'limited' | 'throttled')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; evidence?: (PublishedEvidence | null)[]; design?: DesignOptions; merged?: Record<string, MergedPullRequest | null> } = {}) {
   const { repo, world, events, eventLines } = setup([['001-first', true]], [], options.design)
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
@@ -300,6 +301,8 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
       const round = reviews.push(prompt)
       const findings = options.breaks?.[round - 1] ?? []
       if (findings === 'fails') throw new Error('codex died')
+      if (findings === 'limited') throw new Error("codex ended with 1:  You've hit your usage limit. Try again at 3:05 PM.")
+      if (findings === 'throttled') throw new Error('codex ended with 1:  429 Too Many Requests')
       return { findings }
     },
     auditExcess: async () => {
@@ -309,7 +312,9 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     fix: async (_worktree, prompt) => {
       fixPrompts.push(prompt)
       const ids = [...prompt.matchAll(/\*\*([BE]\d+)\*\*/g)].map((match) => match[1])
-      return { summary: 'fixed', dispositions: ids.map((id) => ({ id, action: 'fixed' as const, reason: '' })), checks: [], blockers: [], ...options.fix }
+      const wave = { summary: 'fixed', dispositions: ids.map((id) => ({ id, action: 'fixed' as const, reason: '' })), checks: [], blockers: [], ...options.fix }
+      if (wave.dispositions.some((disposition) => disposition.action === 'fixed')) head = `gate-fix-${fixPrompts.length}`
+      return wave
     },
     head: () => head,
     linesChanged: () => options.lines ?? { added: 5, deleted: 5 },
@@ -636,6 +641,63 @@ test('a review pass that fails twice is never reported as clean, and the next bu
 test('a review pass that fails once is tried again', async () => {
   const { report } = await buildPr({ breaks: ['fails', []] })
   assert.equal(gateOf(report).state, 'clean')
+})
+
+test('a review pass that hits the codex usage limit is not tried again and says so', async () => {
+  const { report, reviews } = await buildPr({ breaks: ['limited'] })
+  assert.equal(reviews.length, 1)
+  assert.equal(gateOf(report).state, 'did not run')
+  assert.match(gateOf(report).problems[0], /break-it pass hit the codex usage limit in round 1 — try again after it resets: .*Try again at 3:05 PM/)
+})
+
+test('a review pass turned away for sending too many requests is not tried again either', async () => {
+  const { report, reviews } = await buildPr({ breaks: ['throttled'] })
+  assert.deepEqual([reviews.length, gateOf(report).problems[0].includes('usage limit')], [1, true])
+})
+
+const gateAgain = (built: Awaited<ReturnType<typeof buildPr>>, changes: { workshop?: Partial<Workshop>; claim?: Partial<Claim> } = {}) =>
+  runGate(built.claim.prs[0], { ...built.claim, ...changes.claim }, built.world.store.prReport('owner/app', 1)!, built.world, { ...built.workshop, ...changes.workshop })
+
+test('a gate run again on the same commit reuses both reviews instead of paying for them twice', async () => {
+  const built = await buildPr({ breaks: [[P3]] })
+  const again = await gateAgain(built, { workshop: { head: () => 'abc' } })
+  assert.deepEqual([built.reviews.length, built.audited()], [1, 1])
+  assert.deepEqual(again.rounds[0].findings, gateOf(built.report).rounds[0].findings)
+  assert.equal(built.events().filter((type) => type === 'gate pass cached').length, 2)
+})
+
+test('a round on a commit left unchanged because every finding was declined is reviewed afresh, not replayed', async () => {
+  const { report, reviews } = await buildPr({ breaks: [[P1], []], fix: { dispositions: [{ id: 'B1', action: 'declined', reason: 'not a bug' }] } })
+  assert.deepEqual([gateOf(report).state, reviews.length], ['clean', 2])
+})
+
+test('a new commit is reviewed again', async () => {
+  const built = await buildPr()
+  await gateAgain(built, { workshop: { head: () => 'def' } })
+  assert.deepEqual([built.reviews.length, built.audited()], [2, 2])
+})
+
+test('a changed review prompt reviews the same commit again', async () => {
+  const built = await buildPr()
+  await gateAgain(built, { claim: { base: 'feature/y' } })
+  assert.deepEqual([built.reviews.length, built.audited()], [2, 2])
+})
+
+test('a changed reviewer model reviews the same commit again', async (t) => {
+  const built = await buildPr()
+  const model = DEFAULT_MODEL.codex
+  t.after(() => void (DEFAULT_MODEL.codex = model))
+  DEFAULT_MODEL.codex = `${model}-next`
+  await gateAgain(built)
+  assert.deepEqual([built.reviews.length, built.audited()], [2, 2])
+})
+
+test('a gate resumed after a pass died reviews only the code and passes not yet reviewed', async () => {
+  const { report, build, reviews, audited, fixPrompts } = await buildPr({ breaks: [[P1], 'fails', 'fails', []], lines: { added: 40, deleted: 2 } })
+  assert.equal(gateOf(report).state, 'did not run')
+  assert.deepEqual([reviews.length, audited(), fixPrompts.length], [3, 2, 1])
+  assert.equal(gateOf(await build()).state, 'clean')
+  assert.deepEqual([reviews.length, audited(), fixPrompts.length], [4, 2, 1])
 })
 
 test('a fix wave that leaves a check failing or a finding unsettled fails the gate', async () => {
