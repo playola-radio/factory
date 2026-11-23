@@ -13,7 +13,7 @@ import type { Workshop } from './workshop.ts'
 const MAX_ROUNDS = 3
 const SMALL_FIX_LINES = 30
 // Trying again cannot get past a spent codex allowance, and would only hide why the pass failed.
-const USAGE_LIMIT = /usage limit|rate limit/i
+const USAGE_LIMIT = /usage limit|rate[ _]limit|too many requests/i
 
 type Failure = { error: string; limited: boolean }
 type Pass<T> = { findings: T[] } | Failure
@@ -52,11 +52,14 @@ export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, wor
   }
   world.store.record({ ...event, at: world.now(), type: 'gate started' })
   // A pass is kept by the exact commit, prompt and model it reviewed, so a gate resumed after an interruption reviews
-  // each code state once, as an uninterrupted gate would, instead of paying again for reviews it already has.
-  const review = async <T>(head: string, name: string, template: string, run: (prompt: string) => Promise<{ findings: T[] }>): Promise<Pass<T>> => {
+  // each code state once, as an uninterrupted gate would, instead of paying again for reviews it already has. Within
+  // one run, a round on a commit already reviewed (every finding declined, nothing committed) reviews it afresh.
+  const reviewedThisRun = new Set<string>()
+  const review = async <T>(head: string, template: string, run: (prompt: string) => Promise<{ findings: T[] }>): Promise<Pass<T>> => {
     const prompt = renderPrompt(template, values)
-    const key = createHash('sha256').update([head, name, DEFAULT_MODEL.codex, prompt].join('\n')).digest('hex')
-    const kept = world.store.gatePass<T>(claim.repo, key)
+    const key = createHash('sha256').update([head, template, DEFAULT_MODEL.codex, prompt].join('\n')).digest('hex')
+    const kept = reviewedThisRun.has(key) ? null : world.store.gatePass<T>(claim.repo, key)
+    reviewedThisRun.add(key)
     if (kept) {
       world.store.record({ ...event, at: world.now(), type: 'gate pass cached' })
       return kept
@@ -72,8 +75,8 @@ export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, wor
     const step = `gate-pr-${pr.number}-round-${round}`
     const before = workshop.head(worktree)
     const [broken, excess] = await Promise.all([
-      review(before, 'break-it', 'gate-break', (prompt) => workshop.breakIt(worktree, prompt, `${step}-break-it`)),
-      auditExcess ? review(before, 'excess', 'gate-excess', (prompt) => workshop.auditExcess(worktree, prompt, `${step}-excess`)) : { findings: [] },
+      review(before, 'gate-break', (prompt) => workshop.breakIt(worktree, prompt, `${step}-break-it`)),
+      auditExcess ? review(before, 'gate-excess', (prompt) => workshop.auditExcess(worktree, prompt, `${step}-excess`)) : { findings: [] },
     ])
     if ('error' in broken) return end('did not run', [failure('break-it pass', round, broken)])
     if ('error' in excess) return end('did not run', [failure('excess audit', round, excess)])
