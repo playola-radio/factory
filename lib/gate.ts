@@ -27,7 +27,7 @@ async function twice<T>(run: () => Promise<{ findings: T[] }>): Promise<Pass<T>>
 
 export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop): Promise<GateReport> {
   const { worktree } = report
-  const event = { repo: claim.repo, design: claim.design, pr: pr.number }
+  const event = { repo: claim.repo, design: claim.design, runId: claim.runId, pr: pr.number }
   const values = {
     ...designValues(readDesign(worktree, claim.design.slice(0, 3))),
     pr_number: String(pr.number),
@@ -38,14 +38,15 @@ export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, wor
   }
   const rounds: GateRound[] = []
   const end = (state: GateReport['state'], problems: string[] = []): GateReport => {
-    world.store.record({ ...event, at: world.now(), type: `gate ${state}` })
-    return { state, rounds, problems }
+    const gate = { state, rounds, problems }
+    world.store.record({ ...event, at: world.now(), type: `gate ${state}` }, { ...report, gate })
+    return gate
   }
   world.store.record({ ...event, at: world.now(), type: 'gate started' })
 
   let auditExcess = true
   for (let round = 1; round <= MAX_ROUNDS; round++) {
-    ensureDiskSpace(world, claim.design)
+    ensureDiskSpace(world, claim)
     const step = `gate-pr-${pr.number}-round-${round}`
     const [broken, excess] = await Promise.all([
       twice(() => workshop.breakIt(worktree, renderPrompt('gate-break', values), `${step}-break-it`)),

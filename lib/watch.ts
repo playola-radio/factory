@@ -66,7 +66,8 @@ export interface WatchEffects {
 
 // The thin scheduler: keep a `factory build` running for each repo. A build that exits 0 is a clean poll and may
 // start again; one that exits non-zero pauses its repo until this process restarts. Nothing else is read.
-export async function watch(config: WatchConfig, effects: WatchEffects, stop: Promise<void>): Promise<void> {
+// `paused` (repo path → exit code) is passed in so the marge sender can report which repos stopped.
+export async function watch(config: WatchConfig, effects: WatchEffects, stop: Promise<void>, paused = new Map<string, number>()): Promise<void> {
   let stopping = false
   // Aborted on shutdown so the pending poll sleep clears its timer at once, rather than keeping the process
   // alive (and launchd waiting to restart it) for the rest of pollSeconds.
@@ -76,7 +77,6 @@ export async function watch(config: WatchConfig, effects: WatchEffects, stop: Pr
     waking.abort()
   })
   const running = new Map<string, BuildHandle>()
-  const paused = new Set<string>()
 
   while (!stopping) {
     for (const repo of config.repos) {
@@ -88,7 +88,7 @@ export async function watch(config: WatchConfig, effects: WatchEffects, stop: Pr
       void handle.done.then((code) => {
         running.delete(repo.path)
         if (!stopping && code !== 0) {
-          paused.add(repo.path)
+          paused.set(repo.path, code)
           effects.log(`factory build for ${repo.path} exited ${code}; leaving it until the watcher restarts.`)
         }
       })
@@ -113,8 +113,10 @@ export function realIsGitClone(repoPath: string): boolean {
 // Runs a command in its own process group (`detached`), so stop() can signal the whole tree — a `factory build`
 // launches `claude`/`codex` as its own children and does not forward signals, so killing only the build's node
 // process would orphan the agent and let it keep editing the worktree while the next build resumes it.
+// The marge report token stays with the watcher; builds and the agents they run never need it.
 export function spawnTree(command: string, args: string[]): BuildHandle {
-  const child = spawn(command, args, { stdio: 'inherit', env: process.env, detached: true })
+  const { FACTORY_REPORT_TOKEN: _, ...env } = process.env
+  const child = spawn(command, args, { stdio: 'inherit', env, detached: true })
   const done = new Promise<number>((resolve) => {
     child.on('close', (code) => resolve(code ?? 1))
     child.on('error', () => resolve(1))

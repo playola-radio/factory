@@ -76,8 +76,9 @@ function setup(designs: [string, boolean][], branches: string[] = [], design: De
     now: () => '2026-11-17T00:00:00.000Z',
     freeSpace: () => Number.POSITIVE_INFINITY,
   }
-  const events = () => fs.readFileSync(path.join(home, 'events.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).type)
-  return { repo, world, events }
+  const eventLines = () => fs.readFileSync(path.join(home, 'events.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+  const events = () => eventLines().map((event) => event.type)
+  return { repo, world, events, eventLines }
 }
 
 test('starts the lowest-numbered design and lists its PRs', () => {
@@ -118,13 +119,24 @@ test('reports nothing to build when factory/ready is empty', () => {
   assert.deepEqual(startOrResume(repo, world, 'develop'), { state: 'nothing to build' })
 })
 
-test('refuses to claim a design when the disk is nearly full', (t) => {
+test('refuses to claim a design when the disk is nearly full, in a run of its own', (t) => {
   pinFloor(t, '20')
-  const { repo, world, events } = setup([['001-first', true]])
+  const { repo, world, events, eventLines } = setup([['001-first', true]])
   world.freeSpace = () => 2 * GB
   assert.throws(() => startOrResume(repo, world, 'develop'), LowDiskError)
   assert.equal(world.store.claimFor('owner/app'), null)
   assert.deepEqual(events(), ['build refused for space'])
+  assert.match(eventLines()[0].runId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+})
+
+test('a design claimed again after abandoning starts a new run', () => {
+  const { repo, world, eventLines } = setup([['001-first', true]])
+  startOrResume(repo, world, 'develop')
+  abandon(world)
+  startOrResume(repo, world, 'develop')
+  const [claimed, abandoned, claimedAgain] = eventLines()
+  assert.equal(abandoned.runId, claimed.runId)
+  assert.notEqual(claimedAgain.runId, claimed.runId)
 })
 
 test('a full disk does not stop a build that has nothing to build', () => {
@@ -253,7 +265,7 @@ test('uninstall removes the factory command linked into this repository', () => 
 const DONE: Implementation = { status: 'done', summary: 'built', checks: [{ command: 'make lint', passed: true }], blockers: [] }
 
 async function buildPr(options: { result?: Implementation; uncommitted?: string[]; commits?: string[]; worktree?: string; whileImplementing?: (worktree: string) => void; merge?: 'merged' | 'conflicts'; breaks?: (BreakFinding[] | 'fails')[]; excess?: ExcessFinding[][]; fix?: Partial<FixWave>; lines?: { added: number; deleted: number }; github?: Partial<PullRequestState>[]; answer?: Partial<ReviewWave>; answerAction?: 'fixed' | 'declined' | 'answered'; reRecords?: boolean; evidence?: (PublishedEvidence | null)[]; design?: DesignOptions; merged?: Record<string, MergedPullRequest | null> } = {}) {
-  const { repo, world, events } = setup([['001-first', true]], [], options.design)
+  const { repo, world, events, eventLines } = setup([['001-first', true]], [], options.design)
   const started = startOrResume(repo, world, 'feature/x')
   assert.equal(started.state, 'started')
   if (started.state !== 'started') throw new Error('not started')
@@ -343,7 +355,7 @@ async function buildPr(options: { result?: Implementation; uncommitted?: string[
     wait: async () => void (did.waits += 1),
   }
   const build = () => buildNextPr(started.claim.prs, started.claim, world, workshop)
-  return { repo, report: await build(), build, prompts, merges, events, world, workshop, mergedLookups, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop) }
+  return { repo, report: await build(), build, prompts, merges, events, eventLines, claim: started.claim, world, workshop, mergedLookups, reviews, fixPrompts, opened, audited: () => audits, reviewPrompts, replies, did, steps, design: () => buildDesign(started.claim.prs, started.claim, world, workshop) }
 }
 
 test('the first PR is implemented on its own branch from the plan section', async () => {
@@ -353,6 +365,24 @@ test('the first PR is implemented on its own branch from the plan section', asyn
   assert.match(prompts[0], /PR 1, "feature: do the thing"/)
   assert.match(prompts[0], /cut from `feature\/x`/)
   assert.deepEqual(events(), ['design claimed', 'pr started', 'pr implemented', 'gate started', 'gate clean', 'pr opened', 'pr merged'])
+})
+
+test('every event of a build carries its run id, through to finishing', async () => {
+  const { eventLines, claim, world } = await buildPr()
+  finish(world)
+  assert.match(claim.runId, /^[0-9a-f-]{36}$/)
+  assert.deepEqual(new Set(eventLines().map((event) => event.runId)), new Set([claim.runId]))
+})
+
+test('each step that ends with a PR report keeps a copy of the report as it was then', async () => {
+  const { eventLines, world } = await buildPr()
+  const withReports = eventLines().filter((event) => event.artifactId)
+  assert.deepEqual(withReports.map((event) => event.type), ['pr implemented', 'gate clean', 'pr opened', 'pr merged'])
+  const body = (type: string) => world.store.artifact(withReports.find((event) => event.type === type).artifactId) as PrReport
+  assert.equal(body('pr implemented').gate, undefined)
+  assert.equal(body('gate clean').gate?.state, 'clean')
+  assert.equal(body('pr opened').pullRequest?.number, 7)
+  assert.equal(body('pr merged').review?.state, 'merged')
 })
 
 test('once every PR is merged nothing more is run', async () => {
@@ -658,6 +688,13 @@ test("a bot's finding is fixed, pushed, answered in its thread, resolved, and re
   assert.deepEqual(replies, [{ id: 'T1', body: 'reply to R1', resolved: true }])
   assert.deepEqual(did, { pushed: 1, reReviews: 1, merged: 1, mergedHeads: ['fix-1'], waits: 0, evidencePosts: 1, discarded: { worktree: repo, branch: 'factory/001-first/pr-1', base: 'feature/x' } })
   assert.equal(reviewState(report), 'merged')
+})
+
+test('a review round is marked as started before the bot works on it, and its outcome keeps the saved report', async () => {
+  const { events, eventLines, world } = await buildPr({ github: [{}, { items: [BOT_THREAD] }, { approved: true }] })
+  assert.deepEqual(events().slice(-4), ['pr waiting on owner', 'review started', 'review round', 'pr merged'])
+  const round = eventLines().find((event) => event.type === 'review round')
+  assert.equal((world.store.artifact(round.artifactId) as PrReport).review?.rounds.length, 1)
 })
 
 test('no second review is asked for when the score was four or more', async () => {

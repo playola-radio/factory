@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
@@ -45,14 +46,14 @@ export class LowDiskError extends Error {
 
 // Refuses, recording the refusal, when free space on the factory volume is below the floor. Called before the
 // build claims a design and before each agent step, so a step never starts only to crash with ENOSPC partway.
-export function ensureDiskSpace(world: World, design: string, env: NodeJS.ProcessEnv = process.env): void {
+export function ensureDiskSpace(world: World, run: { design: string; runId: string }, env: NodeJS.ProcessEnv = process.env): void {
   const free = world.freeSpace()
   const needed = minFreeBytes(env)
   if (free >= needed) return
   // Best effort: the refusal message and exit code matter more than the event, and the volume that is too full
   // to build may also be too full to append to events.jsonl.
   try {
-    world.store.record({ at: world.now(), repo: world.repoId, design, type: 'build refused for space' })
+    world.store.record({ at: world.now(), repo: world.repoId, design: run.design, runId: run.runId, type: 'build refused for space' })
   } catch {
     // The disk is full enough that even the event cannot be written; still refuse with the clear message.
   }
@@ -90,10 +91,11 @@ export function startOrResume(repo: string, world: World, base: string): BuildRe
     }
   }
 
-  ensureDiskSpace(world, next.design)
-  const claim: Claim = { repo: world.repoId, design: next.design, base, startedAt: world.now(), prs: prsOf(next.design) }
+  const runId = randomUUID()
+  ensureDiskSpace(world, { design: next.design, runId })
+  const claim: Claim = { repo: world.repoId, design: next.design, base, startedAt: world.now(), prs: prsOf(next.design), runId }
   world.store.claim(claim)
-  world.store.record({ at: claim.startedAt, repo: claim.repo, design: claim.design, type: 'design claimed' })
+  world.store.record({ at: claim.startedAt, repo: claim.repo, design: claim.design, runId, type: 'design claimed' })
   return { state: 'started', design: next.design, claim }
 }
 
@@ -101,7 +103,7 @@ export function abandon(world: World): { state: 'abandoned'; design: string; del
   const claim = world.store.claimFor(world.repoId)
   if (!claim) return { state: 'nothing in progress' }
   world.store.release(world.repoId)
-  world.store.record({ at: world.now(), repo: claim.repo, design: claim.design, type: 'design abandoned' })
+  world.store.record({ at: world.now(), repo: claim.repo, design: claim.design, runId: claim.runId, type: 'design abandoned' })
   return { state: 'abandoned', design: claim.design, deleteBeforeBuildingAgain: world.remoteBranches(branchPrefix(claim.design)) }
 }
 
@@ -109,7 +111,7 @@ export function finish(world: World): void {
   const claim = world.store.claimFor(world.repoId)
   if (!claim) return
   world.store.release(world.repoId)
-  world.store.record({ at: world.now(), repo: claim.repo, design: claim.design, type: 'design finished' })
+  world.store.record({ at: world.now(), repo: claim.repo, design: claim.design, runId: claim.runId, type: 'design finished' })
 }
 
 const git = (repo: string, ...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()

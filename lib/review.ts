@@ -21,8 +21,8 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
   const { worktree, branch } = report
   if (!report.pullRequest) throw new Error(`PR ${pr.number} has not been opened`)
   const { number, url } = report.pullRequest
-  const record = (type: Parameters<World['store']['record']>[0]['type']) =>
-    world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type })
+  const record = (type: Parameters<World['store']['record']>[0]['type'], saved?: PrReport) =>
+    world.store.record({ repo: claim.repo, design: claim.design, runId: claim.runId, pr: pr.number, at: world.now(), type }, saved)
   let review: ReviewReport = { rounds: report.review?.rounds ?? [], answered: report.review?.answered ?? [], problems: [] }
   const save = (): PrReport => {
     const saved = { ...report, review }
@@ -31,8 +31,9 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
   }
   const end = (state: NonNullable<ReviewReport['state']>, problems: string[] = []): PrReport => {
     review = { ...review, state, problems }
-    record(state === 'fix failed' ? 'pr needs attention' : `pr ${state}`)
-    return save()
+    const saved = save()
+    record(state === 'fix failed' ? 'pr needs attention' : `pr ${state}`, saved)
+    return saved
   }
   const ask = async (items: ReviewItem[], failedChecks: string[], situation: keyof typeof SITUATION, head: string) => {
     for (const item of items) if (item.fromOwner) workshop.acknowledge(item)
@@ -100,7 +101,8 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     // Before a review round, which may push commits and churn the worktree. The post-merge answering of owner
     // questions below is deliberately not guarded: the merge has happened, so refusing there would only strand
     // those questions unanswered (on restart the merged PR returns at once) without saving any build work.
-    ensureDiskSpace(world, claim.design)
+    ensureDiskSpace(world, claim)
+    record('review started')
     const recorded = workshop.evidenceStamp(worktree)
     const answers = await ask(items, failedChecks, conflicts ? 'conflicts' : 'open', github.head)
     const wave = review.rounds.at(-1)!
@@ -123,7 +125,6 @@ export async function watchPr(pr: PlannedPr, claim: Claim, report: PrReport, wor
     for (const { item, reply } of answers) workshop.reply(number, item, reply!.reply, reply!.action === 'fixed' && !item.fromOwner)
     if (pushed && github.greptileScore !== null && github.greptileScore < RE_REVIEW_BELOW) workshop.requestReview(number)
     review = { ...review, answered: [...review.answered, ...items.filter((item) => item.kind === 'comment').map((item) => item.id)] }
-    save()
-    record('review round')
+    record('review round', save())
   }
 }
