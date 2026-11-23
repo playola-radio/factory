@@ -19,10 +19,8 @@ const planned = (number: number) => ({ number, title: `PR ${number}` }) as Plann
 
 const CLAIM: Claim = { repo: 'playola-radio/playola', design: '014-recorded-shows', base: 'develop', startedAt: '2026-11-21T18:00:00.000Z', prs: [planned(1), planned(2)], runId: RUN }
 
-let ids = 0
 function event(type: LoggedEvent['type'], at: string, pr?: number, runId = RUN): LoggedEvent {
-  ids += 1
-  return { id: `00000000-0000-4000-8000-${String(ids).padStart(12, '0')}`, runId, at, repo: CLAIM.repo, design: CLAIM.design, type, ...(pr && { pr }) }
+  return { id: '00000000-0000-4000-8000-000000000001', runId, at, repo: CLAIM.repo, design: CLAIM.design, type, ...(pr && { pr }) }
 }
 
 function report(number: number, extra: Partial<PrReport> = {}): PrReport {
@@ -30,7 +28,7 @@ function report(number: number, extra: Partial<PrReport> = {}): PrReport {
 }
 
 function watched(extra: Partial<WatchedRepo> = {}, reports: Record<number, PrReport> = {}): WatchedRepo {
-  return { repo: CLAIM.repo, claim: CLAIM, report: (number) => reports[number] ?? null, exitCode: null, counts: NO_COUNTS, ...extra }
+  return { claim: CLAIM, report: (number) => reports[number] ?? null, exitCode: null, counts: NO_COUNTS, ...extra }
 }
 
 const MERGED_1 = report(1, { pullRequest: { number: 811, url: 'https://github.com/playola-radio/playola/pull/811' }, review: { state: 'merged', rounds: [], answered: [], problems: [] } })

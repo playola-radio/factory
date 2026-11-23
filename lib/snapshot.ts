@@ -16,7 +16,6 @@ export interface Counts {
 }
 
 export interface WatchedRepo {
-  repo: string
   claim: Claim | null
   report: (number: number) => PrReport | null
   // Set when the watcher paused this repo because its build exited non-zero.

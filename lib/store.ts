@@ -128,14 +128,6 @@ export interface PrReport {
   review?: ReviewReport
 }
 
-// A copy of a PR report taken when an event was recorded, kept until marge has accepted it.
-export interface Artifact {
-  id: string
-  kind: 'pr_report'
-  at: string
-  body: object
-}
-
 // The only place that knows where factory state lives, so it can move off this disk later.
 export interface Store {
   claimFor(repo: string): Claim | null
@@ -143,10 +135,10 @@ export interface Store {
   release(repo: string): void
   prReport(repo: string, number: number): PrReport | null
   savePrReport(repo: string, report: PrReport): void
-  // With a report, also keeps a copy of it as this event's artifact.
+  // With a report, also keeps a copy of it as this event's artifact, until marge has accepted it.
   record(event: FactoryEvent, report?: PrReport): void
   eventLog(): string
-  artifact(id: string): Artifact | null
+  artifact(id: string): object | null
   forgetArtifact(id: string): void
   // Byte offset into the event log just past the last line marge accepted.
   syncCursor(): number
@@ -206,9 +198,8 @@ export function diskStore(home: string): Store {
     record(event, report) {
       const id = randomUUID()
       if (report) {
-        const artifact: Artifact = { id, kind: 'pr_report', at: event.at, body: artifactBody(report) }
         fs.mkdirSync(path.dirname(artifactFile(id)), { recursive: true })
-        fs.writeFileSync(artifactFile(id), JSON.stringify(artifact))
+        fs.writeFileSync(artifactFile(id), JSON.stringify(artifactBody(report)))
       }
       fs.mkdirSync(home, { recursive: true })
       fs.appendFileSync(eventsFile, `${JSON.stringify({ id, ...event, ...(report && { artifactId: id }) })}\n`)

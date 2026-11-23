@@ -195,10 +195,8 @@ test('a build never sees the token for reporting to marge', async (t) => {
     if (previous === undefined) delete process.env.FACTORY_REPORT_TOKEN
     else process.env.FACTORY_REPORT_TOKEN = previous
   })
-  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-env-')), 'seen')
-  const handle = spawnTree(process.execPath, ['-e', `require('fs').writeFileSync(${JSON.stringify(out)}, String(process.env.FACTORY_REPORT_TOKEN))`])
+  const handle = spawnTree(process.execPath, ['-e', 'process.exit(process.env.FACTORY_REPORT_TOKEN === undefined ? 0 : 1)'])
   assert.equal(await handle.done, 0)
-  assert.equal(fs.readFileSync(out, 'utf8'), 'undefined')
 })
 
 test('a sleep is cut short when its signal aborts', async () => {

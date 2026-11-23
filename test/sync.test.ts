@@ -8,7 +8,7 @@ import { CATALOG } from '../lib/snapshot.ts'
 import type { WatchedRepo } from '../lib/snapshot.ts'
 import { diskStore, legacyRunId } from '../lib/store.ts'
 import type { Claim, FactoryEvent, PrReport, Store } from '../lib/store.ts'
-import { syncLoop } from '../lib/sync.ts'
+import { realSyncEffects, syncLoop } from '../lib/sync.ts'
 import type { SyncEffects } from '../lib/sync.ts'
 import type { PlannedPr } from '../lib/types.ts'
 
@@ -27,8 +27,7 @@ interface Push {
 
 // Runs the loop on a fake clock: each sleep moves the clock on, and `during` can change the world at a given second.
 async function run(options: { env?: NodeJS.ProcessEnv; seconds?: number; status?: (push: number) => number | Error; store?: Store; repos?: () => WatchedRepo[]; during?: Record<number, () => void> } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-sync-'))
-  const store = options.store ?? diskStore(home)
+  const store = options.store ?? diskStore(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-sync-')))
   let clock = START
   const pushes: Push[] = []
   const logs: string[] = []
@@ -37,7 +36,7 @@ async function run(options: { env?: NodeJS.ProcessEnv; seconds?: number; status?
   const effects: SyncEffects = {
     store,
     signature: () => String(store.eventLog().length),
-    repos: options.repos ?? (() => [{ repo: 'owner/app', claim: CLAIM, report: () => null, exitCode: null, counts: { upNext: 0, planNotFinished: 0, done: 0 } }]),
+    repos: options.repos ?? (() => [{ claim: CLAIM, report: () => null, exitCode: null, counts: { upNext: 0, planNotFinished: 0, done: 0 } }]),
     post: async (url, token, body) => {
       pushes.push({ at: (clock - START) / 1000, url, token, body: JSON.parse(body) })
       const status = options.status?.(pushes.length) ?? 204
@@ -53,7 +52,7 @@ async function run(options: { env?: NodeJS.ProcessEnv; seconds?: number; status?
     log: (message) => void logs.push(message),
   }
   await syncLoop(options.env ?? ENV, effects, stop)
-  return { pushes, logs, store, home }
+  return { pushes, logs }
 }
 
 const record = (store: Store, type: FactoryEvent['type'], report?: PrReport) =>
@@ -70,7 +69,7 @@ test('a push carries the status list, the latest state, and the new history with
   assert.deepEqual(push.body.snapshot.builds.map((build) => build.runId), [RUN])
   assert.deepEqual(push.body.snapshot.counts, { upNext: 0, planNotFinished: 0, done: 0 })
   const [claimed, implemented] = push.body.events
-  assert.deepEqual(Object.keys(claimed), ['id', 'runId', 'at', 'repo', 'design', 'pr', 'type', 'artifactId'])
+  assert.deepEqual(Object.keys(claimed).sort(), ['artifactId', 'at', 'design', 'id', 'pr', 'repo', 'runId', 'type'])
   assert.deepEqual([claimed.pr, claimed.artifactId, claimed.runId], [null, null, RUN])
   assert.equal(implemented.artifactId, implemented.id)
   const { worktree: _, ...body } = REPORT
@@ -117,6 +116,25 @@ test('a state read that fails sends nothing rather than a stale state', async ()
   const { pushes, logs } = await run({ repos: () => { throw new Error('base view is mid-checkout') } })
   assert.deepEqual(pushes, [])
   assert.match(logs.join('\n'), /mid-checkout/)
+})
+
+test('a token pasted with a line ending is sent without it', async () => {
+  const { pushes } = await run({ env: { FACTORY_REPORT_TOKEN: 'secret-token\r\n' } })
+  assert.equal(pushes[0].token, 'secret-token')
+})
+
+test('a request that gets no answer fails without quoting the token', async () => {
+  const effects = realSyncEffects('/does/not/matter', diskStore('/does/not/matter'), [], new Map(), async () => {}, () => {})
+  await assert.rejects(effects.post('http://127.0.0.1:1/v1/factory/sync', 'secret\ntoken', '{}'), (error: Error) => !error.message.includes('secret'))
+})
+
+test('a log replaced by a shorter one is sent again from its start', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-sync-'))
+  const store = diskStore(home)
+  store.saveSyncCursor(10_000)
+  record(store, 'design claimed')
+  const [push] = (await run({ store })).pushes
+  assert.deepEqual(push.body.events.map((event) => event.type), ['design claimed'])
 })
 
 test('with no token nothing is sent, the sender says so once and stops', async () => {

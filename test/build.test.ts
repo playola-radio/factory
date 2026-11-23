@@ -119,19 +119,13 @@ test('reports nothing to build when factory/ready is empty', () => {
   assert.deepEqual(startOrResume(repo, world, 'develop'), { state: 'nothing to build' })
 })
 
-test('refuses to claim a design when the disk is nearly full', (t) => {
+test('refuses to claim a design when the disk is nearly full, in a run of its own', (t) => {
   pinFloor(t, '20')
-  const { repo, world, events } = setup([['001-first', true]])
+  const { repo, world, events, eventLines } = setup([['001-first', true]])
   world.freeSpace = () => 2 * GB
   assert.throws(() => startOrResume(repo, world, 'develop'), LowDiskError)
   assert.equal(world.store.claimFor('owner/app'), null)
   assert.deepEqual(events(), ['build refused for space'])
-})
-
-test('a refusal before any claim still belongs to a run of its own', (t) => {
-  pinFloor(t, '20')
-  const { repo, world, eventLines } = setup([['001-first', true]])
-  assert.throws(() => startOrResume(repo, { ...world, freeSpace: () => 5 * GB }, 'develop'), LowDiskError)
   assert.match(eventLines()[0].runId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
 })
 
@@ -384,7 +378,7 @@ test('each step that ends with a PR report keeps a copy of the report as it was 
   const { eventLines, world } = await buildPr()
   const withReports = eventLines().filter((event) => event.artifactId)
   assert.deepEqual(withReports.map((event) => event.type), ['pr implemented', 'gate clean', 'pr opened', 'pr merged'])
-  const body = (type: string) => world.store.artifact(withReports.find((event) => event.type === type).artifactId)!.body as PrReport
+  const body = (type: string) => world.store.artifact(withReports.find((event) => event.type === type).artifactId) as PrReport
   assert.equal(body('pr implemented').gate, undefined)
   assert.equal(body('gate clean').gate?.state, 'clean')
   assert.equal(body('pr opened').pullRequest?.number, 7)
@@ -700,7 +694,7 @@ test('a review round is marked as started before the bot works on it, and its ou
   const { events, eventLines, world } = await buildPr({ github: [{}, { items: [BOT_THREAD] }, { approved: true }] })
   assert.deepEqual(events().slice(-4), ['pr waiting on owner', 'review started', 'review round', 'pr merged'])
   const round = eventLines().find((event) => event.type === 'review round')
-  assert.equal((world.store.artifact(round.artifactId)!.body as PrReport).review?.rounds.length, 1)
+  assert.equal((world.store.artifact(round.artifactId) as PrReport).review?.rounds.length, 1)
 })
 
 test('no second review is asked for when the score was four or more', async () => {

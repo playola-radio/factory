@@ -6,7 +6,7 @@ import { repoIdFromRemote } from './build.ts'
 import { CATALOG, countDesigns, snapshot } from './snapshot.ts'
 import type { LoggedEvent, WatchedRepo } from './snapshot.ts'
 import { derivedUuid, legacyRunId } from './store.ts'
-import type { Artifact, Store } from './store.ts'
+import type { Store } from './store.ts'
 import type { RepoConfig } from './watch.ts'
 
 // Pushes the factory's state to marge (POST /v1/factory/sync, contract in marge-web's
@@ -32,6 +32,13 @@ export interface SyncEffects {
   now(): Date
   sleep(ms: number, signal: AbortSignal): Promise<void>
   log(message: string): void
+}
+
+interface Artifact {
+  id: string
+  kind: 'pr_report'
+  at: string
+  body: object
 }
 
 interface Line {
@@ -87,9 +94,12 @@ function readLog(text: string, log: (message: string) => void, cursor: number): 
   return lines
 }
 
-function readArtifact(store: Store, id: string, log: (message: string) => void): Artifact | null {
+function readArtifact(store: Store, event: LoggedEvent, log: (message: string) => void): Artifact | null {
+  const id = event.artifactId
+  if (!id) return null
   try {
-    return store.artifact(id)
+    const body = store.artifact(id)
+    return body && { id, kind: 'pr_report', at: event.at, body }
   } catch (error) {
     log(`Not sending report ${id} to marge: ${(error as Error).message}`)
     return null
@@ -99,8 +109,10 @@ function readArtifact(store: Store, id: string, log: (message: string) => void):
 // One push built from one full read of the state, carrying the oldest history marge has not accepted yet.
 function nextPush(effects: SyncEffects) {
   const { store, log } = effects
-  const cursor = store.syncCursor()
-  const lines = readLog(store.eventLog(), log, cursor)
+  const text = store.eventLog()
+  // A log cut shorter than the cursor was replaced; send it from the start, since marge ignores ids it already has.
+  const cursor = store.syncCursor() > Buffer.byteLength(text) ? 0 : store.syncCursor()
+  const lines = readLog(text, log, cursor)
   const repos = effects.repos()
   const events: object[] = []
   const artifacts: Artifact[] = []
@@ -109,7 +121,7 @@ function nextPush(effects: SyncEffects) {
   const pending = lines.filter((line) => line.end > cursor)
   for (const { end: lineEnd, event } of pending) {
     if (event) {
-      const artifact = event.artifactId ? readArtifact(store, event.artifactId, log) : null
+      const artifact = readArtifact(store, event, log)
       const sent = { id: event.id, runId: event.runId, at: event.at, repo: event.repo, design: event.design, pr: event.pr ?? null, type: event.type, artifactId: artifact ? artifact.id : null }
       const size = Buffer.byteLength(JSON.stringify(sent)) + (artifact ? Buffer.byteLength(JSON.stringify(artifact)) : 0)
       if (events.length === MAX_EVENTS || (artifact && artifacts.length === MAX_ARTIFACTS) || (events.length > 0 && bytes + size > MAX_HISTORY_BYTES)) break
@@ -126,7 +138,7 @@ function nextPush(effects: SyncEffects) {
 
 export async function syncLoop(env: NodeJS.ProcessEnv, effects: SyncEffects, stop: Promise<void>): Promise<void> {
   const url = env.MARGE_API_URL ?? DEFAULT_URL
-  const token = env.FACTORY_REPORT_TOKEN
+  const token = env.FACTORY_REPORT_TOKEN?.trim()
   if (!token) return effects.log('FACTORY_REPORT_TOKEN is not set, so the factory is not reporting to marge.')
   if (!url) return effects.log('MARGE_API_URL is empty, so the factory is not reporting to marge.')
 
@@ -140,7 +152,6 @@ export async function syncLoop(env: NodeJS.ProcessEnv, effects: SyncEffects, sto
   let heartbeatAt = 0
   let retryAt = 0
   let more = false
-  let failing = false
 
   while (!stopping) {
     const now = effects.now().getTime()
@@ -152,18 +163,15 @@ export async function syncLoop(env: NodeJS.ProcessEnv, effects: SyncEffects, sto
         if (status !== 204) throw new Error(`marge answered ${status}`)
         effects.store.saveSyncCursor(push.end)
         for (const id of push.artifactIds) effects.store.forgetArtifact(id)
-        if (failing) effects.log('Reporting to marge again.')
         sentSignature = signature
         heartbeatAt = now + HEARTBEAT_MS
         more = push.more
-        failing = false
       }
     } catch (error) {
       effects.log(`Could not report to marge; trying again in a minute: ${(error as Error).message}`)
       retryAt = now + RETRY_MS
-      failing = true
     }
-    await Promise.race([effects.sleep(POLL_MS, waking.signal), stop])
+    await effects.sleep(POLL_MS, waking.signal)
   }
 }
 
@@ -178,7 +186,6 @@ export function realSyncEffects(home: string, store: Store, repos: RepoConfig[],
         const id = repoIdFromRemote(execFileSync('git', ['-C', repo.path, 'remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim())
         const claim = store.claimFor(id)
         return {
-          repo: id,
           claim,
           report: (number) => store.prReport(id, number),
           exitCode: paused.get(repo.path) ?? null,
@@ -186,11 +193,14 @@ export function realSyncEffects(home: string, store: Store, repos: RepoConfig[],
         }
       }),
     post: async (url, token, body) => {
+      // fetch's own errors can quote the request headers, token and all, so only their cause is passed on.
       const response = await fetch(url, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body,
         signal: AbortSignal.timeout(15_000),
+      }).catch((error: Error) => {
+        throw new Error(`no answer (${(error.cause as NodeJS.ErrnoException | undefined)?.code ?? error.name})`)
       })
       await response.body?.cancel()
       return response.status

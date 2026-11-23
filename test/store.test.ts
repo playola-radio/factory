@@ -46,7 +46,7 @@ test('an event recorded with a report keeps a copy of it, without the worktree p
   const [event] = lines(dir)
   assert.equal(event.artifactId, event.id)
   const { worktree: _, ...withoutWorktree } = REPORT
-  assert.deepEqual(store.artifact(event.id), { id: event.id, kind: 'pr_report', at: '2026-11-23T00:00:00.000Z', body: withoutWorktree })
+  assert.deepEqual(store.artifact(event.id), withoutWorktree)
 })
 
 test('a report too big for marge is kept as a short stub instead', () => {
@@ -55,7 +55,7 @@ test('a report too big for marge is kept as a short stub instead', () => {
   const huge = { ...REPORT, problems: ['x'.repeat(300 * 1024)] }
   store.record({ at: '2026-11-23T00:00:00.000Z', repo: 'owner/app', design: '001-first', runId: RUN, pr: 1, type: 'pr needs attention' }, huge)
   const [event] = lines(dir)
-  const body = store.artifact(event.id)!.body as Record<string, unknown>
+  const body = store.artifact(event.id) as Record<string, unknown>
   assert.equal(body.number, 1)
   assert.equal(body.state, 'implemented')
   assert.match(String(body.omitted), /256 KiB/)
