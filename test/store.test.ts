@@ -65,6 +65,13 @@ test('an event recorded without a report points at none', () => {
   assert.equal(lines(dir)[0].artifactId, undefined)
 })
 
+test('an unavailable report copy does not prevent recording the event', () => {
+  const dir = home()
+  fs.writeFileSync(path.join(dir, 'artifacts'), 'not a directory')
+  diskStore(dir).record({ at: '2026-11-23T00:00:00.000Z', repo: 'owner/app', design: '001-first', runId: RUN, pr: 1, type: 'pr implemented' }, REPORT)
+  assert.equal(lines(dir)[0].artifactId, undefined)
+})
+
 test('a claim written before run ids existed reads back with one derived from its start', () => {
   const dir = home()
   const store = diskStore(dir)

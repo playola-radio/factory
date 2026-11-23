@@ -197,12 +197,18 @@ export function diskStore(home: string): Store {
     },
     record(event, report) {
       const id = randomUUID()
+      let artifactId: string | undefined
       if (report) {
-        fs.mkdirSync(path.dirname(artifactFile(id)), { recursive: true })
-        fs.writeFileSync(artifactFile(id), JSON.stringify(artifactBody(report)))
+        try {
+          fs.mkdirSync(path.dirname(artifactFile(id)), { recursive: true })
+          fs.writeFileSync(artifactFile(id), JSON.stringify(artifactBody(report)))
+          artifactId = id
+        } catch (error) {
+          console.error('Could not save report copy:', error)
+        }
       }
       fs.mkdirSync(home, { recursive: true })
-      fs.appendFileSync(eventsFile, `${JSON.stringify({ id, ...event, ...(report && { artifactId: id }) })}\n`)
+      fs.appendFileSync(eventsFile, `${JSON.stringify({ id, ...event, ...(artifactId && { artifactId }) })}\n`)
     },
     eventLog() {
       return fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, 'utf8') : ''
