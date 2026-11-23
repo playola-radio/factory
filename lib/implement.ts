@@ -47,7 +47,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   const openPr = (gated: PrReport): Promise<PrReport> => {
     if (last) workshop.markDesignBuilt(gated.worktree, claim.design)
     const body = pullRequestBody(gated, claim.design, pr.number, prs.length)
-    const pullRequest = workshop.openPullRequest(gated.worktree, gated.branch, claim.base, pr.title, body)
+    const pullRequest = workshop.openPullRequest(gated.worktree, gated.branch, claim.base, pullRequestTitle(pr.title, pr.number, prs.length), body)
     // Posted while the scratch folder holding the recordings still exists; it goes with the worktree once the PR merges.
     const evidence = workshop.publishEvidence(gated.worktree, pullRequest.number)
     const opened = { ...gated, pullRequest, ...(evidence && { evidence }) }
@@ -83,7 +83,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
       // The branch name carries only the design and PR number, so a merged PR from an earlier plan can match a
       // rewritten PR that reuses the number for different work. Its title is the plan title it was opened under; when
       // that no longer matches this PR's title the plan was rewritten after the merge — stop rather than skip new work.
-      if (merged.title !== pr.title) {
+      if (merged.title !== pr.title && merged.title !== pullRequestTitle(pr.title, pr.number, prs.length)) {
         return { state: 'stopped', number: pr.number, reason: `${branch} is already merged on GitHub as PR ${merged.number} (${merged.url}) titled "${merged.title}", but PR ${pr.number} in the plan is now "${pr.title}". The plan was rewritten after that PR merged; reconcile it before rebuilding.` }
       }
       // The last PR's build is what moves the design into factory/done; a last PR already merged means that move never
@@ -156,6 +156,11 @@ function mergedReport(number: number, branch: string, pullRequest: PullRequest):
     pullRequest,
     review: { state: 'merged', rounds: [], answered: [], problems: [] },
   }
+}
+
+// Shows a multi-PR design's progress in the title the PR is opened under; the plan's own title is left alone.
+export function pullRequestTitle(planTitle: string, position: number, total: number): string {
+  return total > 1 ? `${planTitle} (PR ${position}/${total})` : planTitle
 }
 
 function pullRequestBody(report: PrReport, design: string, number: number, total: number): string {
