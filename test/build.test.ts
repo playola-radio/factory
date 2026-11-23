@@ -391,7 +391,7 @@ test('once every PR is merged nothing more is run', async () => {
   assert.deepEqual([prompts.length, reviews.length, opened.length], [1, 1, 1])
 })
 
-// The merged PR carries the title the factory opened it under — PR 1's planned title in the two-PR plan.
+// A PR merged before titles carried a progress suffix: its title is PR 1's bare planned title in the two-PR plan.
 const MERGED_1: MergedPullRequest = { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: do the thing' }
 
 test('a PR already merged on GitHub with no local record is skipped for the next one', async () => {
@@ -431,6 +431,18 @@ test('a PR the store already records as merged is not re-checked against GitHub'
   assert.deepEqual(await build(), { state: 'all PRs merged' })
   // Selecting past a store-merged PR reads the store, adding no GitHub lookup.
   assert.equal(mergedLookups.length, before)
+})
+
+test('a PR merged on GitHub under its progress-suffixed title is skipped for the next one', async () => {
+  const suffixed = { ...MERGED_1, title: 'feature: do the thing (PR 1/2)' }
+  const { report, prompts } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': suffixed } })
+  assert.equal('branch' in report && report.branch, 'factory/001-first/pr-2')
+  assert.equal(prompts.length, 1)
+})
+
+test('a PR of a multi-PR plan is opened with its place in the plan on its title', async () => {
+  const { opened } = await buildPr({ design: TWO_PRS })
+  assert.equal(opened[0].title, 'feature: do the thing (PR 1/2)')
 })
 
 test('a merged PR whose title no longer matches the rewritten plan stops for the owner', async () => {

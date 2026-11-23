@@ -7,6 +7,9 @@ repo ending in an `ImplementationPlan.md`. The factory then builds that plan one
 implemented by one AI agent in a fresh worktree. The other vendor's agent tries to break it and audits it for
 excess. The factory then opens the PR, answers the reviewers and merges once the owner approves.
 
+Each PR is opened under its title from the plan. When the plan has more than one PR, the title ends with the PR's
+place in the plan, e.g. `chore: fetch the changes (PR 2/5)`; a single-PR plan's title has no suffix.
+
 > Still being made generic: the owner, bot account, review bot and default base branch are currently built in.
 > They are moving into a settings file.
 
