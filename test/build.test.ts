@@ -483,10 +483,17 @@ test('a PR in a multi-PR plan is opened with its progress in the title', async (
   assert.equal(opened[0].title, 'feature: do the thing (PR 1/2)')
 })
 
-test('a merged PR opened under the suffixed title still matches its plan title', async () => {
-  const suffixed: MergedPullRequest = { ...MERGED_1, title: 'feature: do the thing (PR 1/2)' }
+test('a merged PR opened under a suffix with a different total still matches its plan title', async () => {
+  // PR 1 merged as "(PR 1/3)" and the plan has since been shortened to two PRs.
+  const suffixed: MergedPullRequest = { ...MERGED_1, title: 'feature: do the thing (PR 1/3)' }
   const { report } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': suffixed } })
   assert.equal('branch' in report && report.branch, 'factory/001-first/pr-2')
+})
+
+test('a merged PR with a suffix still stops when its plan title changed', async () => {
+  const stale: MergedPullRequest = { ...MERGED_1, title: 'feature: the old plan 1 (PR 1/2)' }
+  const { report } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': stale } })
+  assert.equal(report.state, 'stopped')
 })
 
 test('a multi-PR plan title gets a progress suffix', () => {
