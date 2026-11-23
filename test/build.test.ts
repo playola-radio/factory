@@ -11,7 +11,7 @@ import { readDesign } from '../lib/design.ts'
 import { runGate } from '../lib/gate.ts'
 import { watchPr } from '../lib/review.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
-import { buildDesign, buildNextPr } from '../lib/implement.ts'
+import { buildDesign, buildNextPr, pullRequestTitle } from '../lib/implement.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, MergedPullRequest, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
 import { diskStore } from '../lib/store.ts'
@@ -391,7 +391,7 @@ test('once every PR is merged nothing more is run', async () => {
   assert.deepEqual([prompts.length, reviews.length, opened.length], [1, 1, 1])
 })
 
-// A PR merged before titles carried a progress suffix: its title is PR 1's bare planned title in the two-PR plan.
+// The merged PR carries the title the factory opened it under — PR 1's planned title in the two-PR plan.
 const MERGED_1: MergedPullRequest = { number: 16, url: 'https://github.com/owner/app/pull/16', title: 'feature: do the thing' }
 
 test('a PR already merged on GitHub with no local record is skipped for the next one', async () => {
@@ -431,18 +431,6 @@ test('a PR the store already records as merged is not re-checked against GitHub'
   assert.deepEqual(await build(), { state: 'all PRs merged' })
   // Selecting past a store-merged PR reads the store, adding no GitHub lookup.
   assert.equal(mergedLookups.length, before)
-})
-
-test('a PR merged on GitHub under its progress-suffixed title is skipped for the next one', async () => {
-  const suffixed = { ...MERGED_1, title: 'feature: do the thing (PR 1/2)' }
-  const { report, prompts } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': suffixed } })
-  assert.equal('branch' in report && report.branch, 'factory/001-first/pr-2')
-  assert.equal(prompts.length, 1)
-})
-
-test('a PR of a multi-PR plan is opened with its place in the plan on its title', async () => {
-  const { opened } = await buildPr({ design: TWO_PRS })
-  assert.equal(opened[0].title, 'feature: do the thing (PR 1/2)')
 })
 
 test('a merged PR whose title no longer matches the rewritten plan stops for the owner', async () => {
@@ -488,6 +476,36 @@ test('a PR that comes through the gate clean is opened into the base branch unde
   assert.deepEqual('pullRequest' in report && report.pullRequest, { number: 7, url: 'https://github.com/owner/app/pull/7' })
   assert.deepEqual([opened[0].branch, opened[0].base, opened[0].title], ['factory/001-first/pr-1', 'feature/x', 'feature: do the thing'])
   assert.match(opened[0].body, /built[\s\S]*factory\/ready\/001-first[\s\S]*0 findings fixed, 1 declined[\s\S]*B1 declined: not worth the complexity/)
+})
+
+test('a PR in a multi-PR plan is opened with its progress in the title', async () => {
+  const { opened } = await buildPr({ design: TWO_PRS })
+  assert.equal(opened[0].title, 'feature: do the thing (PR 1/2)')
+})
+
+test('a merged PR opened under a suffix with a different total still matches its plan title', async () => {
+  // PR 1 merged as "(PR 1/3)" and the plan has since been shortened to two PRs.
+  const suffixed: MergedPullRequest = { ...MERGED_1, title: 'feature: do the thing (PR 1/3)' }
+  const { report } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': suffixed } })
+  assert.equal('branch' in report && report.branch, 'factory/001-first/pr-2')
+})
+
+test('a merged PR with a suffix still stops when its plan title changed', async () => {
+  const stale: MergedPullRequest = { ...MERGED_1, title: 'feature: the old plan 1 (PR 1/2)' }
+  const { report } = await buildPr({ design: TWO_PRS, merged: { 'factory/001-first/pr-1': stale } })
+  assert.equal(report.state, 'stopped')
+})
+
+test('a multi-PR plan title gets a progress suffix', () => {
+  assert.equal(pullRequestTitle('chore: read pull request changes', 2, 5), 'chore: read pull request changes (PR 2/5)')
+})
+
+test('a single-PR plan title is left alone', () => {
+  assert.equal(pullRequestTitle('feature: do the thing', 1, 1), 'feature: do the thing')
+})
+
+test('a title already ending in parentheses still gets the suffix after them', () => {
+  assert.equal(pullRequestTitle('bugfix: stop duplicate emails (again)', 3, 4), 'bugfix: stop duplicate emails (again) (PR 3/4)')
 })
 
 test('a PR the gate did not pass is not opened', async () => {

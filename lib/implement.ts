@@ -18,6 +18,8 @@ export type PrBuildReport =
   | { state: 'stopped'; number: number; reason: string }
 
 const MAX_ATTEMPTS = 3
+// The progress suffix a PR was opened under; its total is whatever the plan's length was then, so it is dropped before titles are compared.
+const PROGRESS_SUFFIX = / \(PR \d+\/\d+\)$/
 
 const MERGE_NOTE = {
   merged: 'The latest `{base}` has been merged in cleanly.',
@@ -47,8 +49,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   const openPr = (gated: PrReport): Promise<PrReport> => {
     if (last) workshop.markDesignBuilt(gated.worktree, claim.design)
     const body = pullRequestBody(gated, claim.design, pr.number, prs.length)
-    const title = pullRequestTitle(pr.title, pr.number, prs.length)
-    const pullRequest = workshop.openPullRequest(gated.worktree, gated.branch, claim.base, title, body)
+    const pullRequest = workshop.openPullRequest(gated.worktree, gated.branch, claim.base, pullRequestTitle(pr.title, pr.number, prs.length), body)
     // Posted while the scratch folder holding the recordings still exists; it goes with the worktree once the PR merges.
     const evidence = workshop.publishEvidence(gated.worktree, pullRequest.number)
     const opened = { ...gated, pullRequest, ...(evidence && { evidence }) }
@@ -82,10 +83,9 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
     const merged = workshop.mergedPullRequest(branch, claim.base)
     if (merged) {
       // The branch name carries only the design and PR number, so a merged PR from an earlier plan can match a
-      // rewritten PR that reuses the number for different work. Its title is the plan title it was opened under (with
-      // or without the progress suffix, which older PRs lack); when neither matches, the plan was rewritten after the
-      // merge — stop rather than skip new work.
-      if (merged.title !== pr.title && merged.title !== pullRequestTitle(pr.title, pr.number, prs.length)) {
+      // rewritten PR that reuses the number for different work. Its title is the plan title it was opened under; when
+      // that no longer matches this PR's title the plan was rewritten after the merge — stop rather than skip new work.
+      if (merged.title.replace(PROGRESS_SUFFIX, '') !== pr.title) {
         return { state: 'stopped', number: pr.number, reason: `${branch} is already merged on GitHub as PR ${merged.number} (${merged.url}) titled "${merged.title}", but PR ${pr.number} in the plan is now "${pr.title}". The plan was rewritten after that PR merged; reconcile it before rebuilding.` }
       }
       // The last PR's build is what moves the design into factory/done; a last PR already merged means that move never
@@ -160,10 +160,9 @@ function mergedReport(number: number, branch: string, pullRequest: PullRequest):
   }
 }
 
-// A PR in a multi-PR plan says where it sits on its title, e.g. "chore: fetch the changes (PR 2/5)"; a single-PR
-// plan's title is left as planned.
-export function pullRequestTitle(title: string, number: number, total: number): string {
-  return total > 1 ? `${title} (PR ${number}/${total})` : title
+// Shows a multi-PR design's progress in the title the PR is opened under; the plan's own title is left alone.
+export function pullRequestTitle(planTitle: string, position: number, total: number): string {
+  return total > 1 ? `${planTitle} (PR ${position}/${total})` : planTitle
 }
 
 function pullRequestBody(report: PrReport, design: string, number: number, total: number): string {
