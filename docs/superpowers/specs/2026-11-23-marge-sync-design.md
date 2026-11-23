@@ -49,13 +49,16 @@ sender deletes each one after a push carrying it gets `204`.
 
 - **History.** A byte cursor in `$FACTORY_HOME/sync.json` marks the end of the last line marge accepted. Each push
   carries the complete lines after it, oldest first: at most 500 events, 50 reports, and about 4 MB in all. A line
-  that cannot be read, or breaks the contract's rules, is logged and skipped. The cursor moves only on `204`. When
+  that cannot be read, or breaks the contract's rules, is logged and skipped; a report file that cannot be read fails
+  the push, which is retried a minute later. A log cut shorter than the cursor is sent again from its start. The
+  cursor moves only on `204`. When
   more history is waiting, the next push goes on the next 5-second poll.
 - **Status list.** Fixed in `lib/snapshot.ts`, in the page's sort order: `needs_you` (attention), `stopped`
   (failure), `no_progress` (quiet), `running` (active), `done` (complete).
 - **Builds.** One row per watched repo with a claim, plus one per `design finished` event in the last 24 hours.
   - Stages: Implement, Review gate, PR open, Reviewers, Merge. The current stage comes from the current PR's latest
-    event (the first planned PR whose report is not merged).
+    event (the first planned PR whose report is not merged), leaving out `pr needs attention`, so a stopped PR shows
+    the stage it stopped in.
   - Status, first match wins: the watcher paused the repo → `stopped`; the current PR's latest event is
     `pr waiting on owner` → `needs_you`; nothing new for 60 minutes → `no_progress`; otherwise `running`.
   - `review.ts` now records `review started` when the bot begins a review round, so a PR the bot is working on

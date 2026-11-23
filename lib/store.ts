@@ -158,7 +158,7 @@ export const legacyRunId = (repo: string, design: string, claimedAt: string) => 
 function artifactBody(report: PrReport): object {
   const { worktree: _, ...body } = report
   if (Buffer.byteLength(JSON.stringify(body)) <= MAX_ARTIFACT_BYTES) return body
-  return { number: report.number, state: report.state, omitted: 'The full report was over 256 KiB, the most marge keeps.' }
+  return { omitted: 'The full report was over 256 KiB, the most marge keeps.' }
 }
 
 export function diskStore(home: string): Store {

@@ -94,16 +94,11 @@ function readLog(text: string, log: (message: string) => void, cursor: number): 
   return lines
 }
 
-function readArtifact(store: Store, event: LoggedEvent, log: (message: string) => void): Artifact | null {
+function readArtifact(store: Store, event: LoggedEvent): Artifact | null {
   const id = event.artifactId
   if (!id) return null
-  try {
-    const body = store.artifact(id)
-    return body && { id, kind: 'pr_report', at: event.at, body }
-  } catch (error) {
-    log(`Not sending report ${id} to marge: ${(error as Error).message}`)
-    return null
-  }
+  const body = store.artifact(id)
+  return body && { id, kind: 'pr_report', at: event.at, body }
 }
 
 // One push built from one full read of the state, carrying the oldest history marge has not accepted yet.
@@ -111,7 +106,8 @@ function nextPush(effects: SyncEffects) {
   const { store, log } = effects
   const text = store.eventLog()
   // A log cut shorter than the cursor was replaced; send it from the start, since marge ignores ids it already has.
-  const cursor = store.syncCursor() > Buffer.byteLength(text) ? 0 : store.syncCursor()
+  const saved = store.syncCursor()
+  const cursor = saved > Buffer.byteLength(text) ? 0 : saved
   const lines = readLog(text, log, cursor)
   const repos = effects.repos()
   const events: object[] = []
@@ -121,7 +117,7 @@ function nextPush(effects: SyncEffects) {
   const pending = lines.filter((line) => line.end > cursor)
   for (const { end: lineEnd, event } of pending) {
     if (event) {
-      const artifact = readArtifact(store, event, log)
+      const artifact = readArtifact(store, event)
       const sent = { id: event.id, runId: event.runId, at: event.at, repo: event.repo, design: event.design, pr: event.pr ?? null, type: event.type, artifactId: artifact ? artifact.id : null }
       const size = Buffer.byteLength(JSON.stringify(sent)) + (artifact ? Buffer.byteLength(JSON.stringify(artifact)) : 0)
       if (events.length === MAX_EVENTS || (artifact && artifacts.length === MAX_ARTIFACTS) || (events.length > 0 && bytes + size > MAX_HISTORY_BYTES)) break

@@ -98,6 +98,11 @@ test('a repo the watcher paused is stopped, with the exit code and the first pro
   assert.deepEqual([build.status, build.reason], ['stopped', 'factory build exited 2; paused until the watcher restarts. Check failed: npm test'])
 })
 
+test('a review fix that failed stays at the reviewers stage', () => {
+  const events = [event('review round', '2026-11-21T18:30:00.000Z', 1), event('pr needs attention', '2026-11-21T18:31:00.000Z', 1)]
+  assert.equal(snapshot([watched({ exitCode: 1 })], events, NOW).builds[0].currentStage, 3)
+})
+
 test('a reason is one line of at most 300 characters', () => {
   const stuck = report(1, { problems: [`line one\nline two ${'x'.repeat(400)}`] })
   const { reason } = snapshot([watched({ exitCode: 1 }, { 1: stuck })], [], NOW).builds[0]

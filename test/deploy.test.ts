@@ -116,7 +116,7 @@ test('the watcher starts with the report token from secrets.env, after the machi
   fs.writeFileSync(path.join(repoDir, 'bin', 'factory.ts'), '#!/bin/sh\necho "$1 $FACTORY_REPORT_TOKEN $MARGE_API_URL"\n')
   fs.chmodSync(path.join(repoDir, 'bin', 'factory.ts'), 0o755)
   const factoryHome = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-'))
-  fs.writeFileSync(path.join(factoryHome, 'env'), 'export MARGE_API_URL=http://localhost:8080\nFACTORY_REPORT_TOKEN=from-env\n')
+  fs.writeFileSync(path.join(factoryHome, 'env'), 'MARGE_API_URL=http://localhost:8080\nFACTORY_REPORT_TOKEN=from-env\n')
   fs.writeFileSync(path.join(factoryHome, 'secrets.env'), 'FACTORY_REPORT_TOKEN=from-secrets\n')
   const { FACTORY_REPORT_TOKEN: _, MARGE_API_URL: __, ...env } = process.env
   const output = execFileSync('bash', [path.join(repoDir, 'deploy', 'run-watch.sh')], { env: { ...env, FACTORY_HOME: factoryHome }, encoding: 'utf8' })

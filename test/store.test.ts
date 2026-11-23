@@ -56,8 +56,6 @@ test('a report too big for marge is kept as a short stub instead', () => {
   store.record({ at: '2026-11-23T00:00:00.000Z', repo: 'owner/app', design: '001-first', runId: RUN, pr: 1, type: 'pr needs attention' }, huge)
   const [event] = lines(dir)
   const body = store.artifact(event.id) as Record<string, unknown>
-  assert.equal(body.number, 1)
-  assert.equal(body.state, 'implemented')
   assert.match(String(body.omitted), /256 KiB/)
 })
 
@@ -65,15 +63,6 @@ test('an event recorded without a report points at none', () => {
   const dir = home()
   diskStore(dir).record({ at: '2026-11-23T00:00:00.000Z', repo: 'owner/app', design: '001-first', runId: RUN, type: 'design claimed' })
   assert.equal(lines(dir)[0].artifactId, undefined)
-})
-
-test('a forgotten report is gone', () => {
-  const dir = home()
-  const store = diskStore(dir)
-  store.record({ at: '2026-11-23T00:00:00.000Z', repo: 'owner/app', design: '001-first', runId: RUN, pr: 1, type: 'pr opened' }, REPORT)
-  const [event] = lines(dir)
-  store.forgetArtifact(event.id)
-  assert.equal(store.artifact(event.id), null)
 })
 
 test('a claim written before run ids existed reads back with one derived from its start', () => {

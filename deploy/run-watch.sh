@@ -8,17 +8,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 FACTORY_HOME="${FACTORY_HOME:-$HOME/.factory}"
 
+# `set -a` exports plain NAME=value lines (MARGE_API_URL, FACTORY_REPORT_TOKEN) to the watcher.
+set -a
 if [ -f "$FACTORY_HOME/env" ]; then
   # shellcheck disable=SC1091
   source "$FACTORY_HOME/env"
 fi
-
-# FACTORY_REPORT_TOKEN for reporting to marge. `set -a` exports plain NAME=value lines to the watcher.
 if [ -f "$FACTORY_HOME/secrets.env" ]; then
-  set -a
   # shellcheck disable=SC1091
   source "$FACTORY_HOME/secrets.env"
-  set +a
 fi
+set +a
 
 exec "$REPO_DIR/bin/factory.ts" watch

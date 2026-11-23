@@ -79,7 +79,8 @@ function inFlight(repo: WatchedRepo, claim: Claim, events: LoggedEvent[], now: D
   const unmerged = reports.findIndex((report) => report?.review?.state !== 'merged')
   const index = unmerged === -1 ? claim.prs.length - 1 : unmerged
   const report = reports[index]
-  const latest = run.filter((event) => event.pr === claim.prs[index].number).at(-1)
+  // A PR needing attention stays at the stage it stopped in, which the event before says.
+  const latest = run.filter((event) => event.pr === claim.prs[index].number && event.type !== 'pr needs attention').at(-1)
   const stage = stageAfter(latest?.type)
   const lastEventAt = run.at(-1)?.at ?? claim.startedAt
   const quietFor = now.getTime() - Date.parse(lastEventAt)
