@@ -93,3 +93,13 @@ test('the sync cursor starts at the beginning and keeps what was saved', () => {
 test('the event log reads as empty before anything is recorded', () => {
   assert.equal(diskStore(home()).eventLog(), '')
 })
+
+test('a kept review pass reads back by its key until the design is given up', () => {
+  const store = diskStore(home())
+  assert.equal(store.gatePass('owner/app', 'k1'), null)
+  store.saveGatePass('owner/app', 'k1', { findings: [{ where: 'a.ts:1' }] })
+  assert.deepEqual(store.gatePass('owner/app', 'k1'), { findings: [{ where: 'a.ts:1' }] })
+  assert.equal(store.gatePass('owner/app', 'k2'), null)
+  store.release('owner/app')
+  assert.equal(store.gatePass('owner/app', 'k1'), null)
+})

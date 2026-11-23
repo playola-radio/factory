@@ -48,7 +48,7 @@ function runProcess(command: string, args: string[], { cwd, prompt, traceFile, t
       clearTimeout(timer)
       trace.end()
       if (code === 0) resolve(stdout)
-      else reject(new Error(`${command} ended with ${code ?? signal}: ${stderr.slice(-2000)}`))
+      else reject(Object.assign(new Error(`${command} ended with ${code ?? signal}: ${stderr.slice(-2000)}`), { stdout }))
     })
     child.stdin.end(prompt)
   })
@@ -69,13 +69,33 @@ async function runClaude(call: StageCall): Promise<unknown> {
   return result.structured_output
 }
 
+// With --json, codex writes why it failed (such as a spent usage limit) as an event on stdout, not to stderr.
+export function codexFailure(stdout: string): string | undefined {
+  const failure = stdout
+    .split('\n')
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)]
+      } catch {
+        return []
+      }
+    })
+    .findLast((event) => event?.type === 'error' || event?.type === 'turn.failed')
+  return failure?.message ?? failure?.error?.message
+}
+
 async function runCodex(call: StageCall): Promise<unknown> {
   const lastMessageFile = call.traceFile.replace(/\.jsonl$/, '.last-message.json')
-  await runProcess(
-    'codex',
-    ['exec', '-m', call.model, '--sandbox', call.canWrite ? 'danger-full-access' : 'read-only', '--json', '--output-schema', call.schemaFile, '-o', lastMessageFile, '-'],
-    call,
-  )
+  try {
+    await runProcess(
+      'codex',
+      ['exec', '-m', call.model, '--sandbox', call.canWrite ? 'danger-full-access' : 'read-only', '--json', '--output-schema', call.schemaFile, '-o', lastMessageFile, '-'],
+      call,
+    )
+  } catch (error) {
+    const reason = codexFailure((error as { stdout?: string }).stdout ?? '')
+    throw reason ? new Error(`${(error as Error).message} ${reason}`) : error
+  }
   return JSON.parse(fs.readFileSync(lastMessageFile, 'utf8'))
 }
 
