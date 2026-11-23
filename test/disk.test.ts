@@ -6,6 +6,7 @@ import type { World } from '../lib/build.ts'
 import type { FactoryEvent } from '../lib/store.ts'
 
 const GB = 1024 ** 3
+const RUN = '11111111-2222-4333-8444-555555555555'
 
 function worldWithFreeSpace(free: number) {
   const events: FactoryEvent[] = []
@@ -33,7 +34,7 @@ test('a non-numeric or negative FACTORY_MIN_FREE_GB is an error', () => {
 
 test('plenty of free space passes the check without recording anything', () => {
   const { world, events } = worldWithFreeSpace(100 * GB)
-  assert.doesNotThrow(() => ensureDiskSpace(world, '001-first', {}))
+  assert.doesNotThrow(() => ensureDiskSpace(world, { design: '001-first', runId: RUN }, {}))
   assert.deepEqual(events, [])
 })
 
@@ -44,13 +45,13 @@ test('a full disk that cannot even record the event still throws the free-space 
     freeSpace: () => 1 * GB,
     store: { record: () => { throw new Error("ENOSPC: no space left on device, open 'events.jsonl'") } },
   } as unknown as World
-  assert.throws(() => ensureDiskSpace(world, '001-first', {}), LowDiskError)
+  assert.throws(() => ensureDiskSpace(world, { design: '001-first', runId: RUN }, {}), LowDiskError)
 })
 
 test('too little free space throws LowDiskError and records a refusal event', () => {
   const { world, events } = worldWithFreeSpace(3 * GB)
   assert.throws(
-    () => ensureDiskSpace(world, '001-first', {}),
+    () => ensureDiskSpace(world, { design: '001-first', runId: RUN }, {}),
     (error: unknown) => {
       assert.ok(error instanceof LowDiskError)
       assert.match(error.message, /3\.0 GB free/)
@@ -58,5 +59,5 @@ test('too little free space throws LowDiskError and records a refusal event', ()
       return true
     },
   )
-  assert.deepEqual(events, [{ at: '2026-11-20T00:00:00.000Z', repo: 'owner/app', design: '001-first', type: 'build refused for space' }])
+  assert.deepEqual(events, [{ at: '2026-11-20T00:00:00.000Z', repo: 'owner/app', design: '001-first', runId: RUN, type: 'build refused for space' }])
 })

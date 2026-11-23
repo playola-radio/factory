@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -9,9 +10,15 @@ export interface Claim {
   base: string
   startedAt: string
   prs: PlannedPr[]
+  // This attempt at building the design; a design given up and claimed again gets a new one.
+  runId: string
 }
 
+// The `id` and `artifactId` are set by the store as it writes the line.
 export interface FactoryEvent {
+  id?: string
+  runId: string
+  artifactId?: string
   at: string
   repo: string
   design: string
@@ -27,6 +34,7 @@ export interface FactoryEvent {
     | 'gate started'
     | `gate ${GateReport['state']}`
     | 'pr opened'
+    | 'review started'
     | 'review round'
     | 'pr waiting on owner'
     | `pr ${NonNullable<ReviewReport['state']>}`
@@ -120,6 +128,14 @@ export interface PrReport {
   review?: ReviewReport
 }
 
+// A copy of a PR report taken when an event was recorded, kept until marge has accepted it.
+export interface Artifact {
+  id: string
+  kind: 'pr_report'
+  at: string
+  body: object
+}
+
 // The only place that knows where factory state lives, so it can move off this disk later.
 export interface Store {
   claimFor(repo: string): Claim | null
@@ -127,17 +143,45 @@ export interface Store {
   release(repo: string): void
   prReport(repo: string, number: number): PrReport | null
   savePrReport(repo: string, report: PrReport): void
-  record(event: FactoryEvent): void
+  // With a report, also keeps a copy of it as this event's artifact.
+  record(event: FactoryEvent, report?: PrReport): void
+  eventLog(): string
+  artifact(id: string): Artifact | null
+  forgetArtifact(id: string): void
+  // Byte offset into the event log just past the last line marge accepted.
+  syncCursor(): number
+  saveSyncCursor(offset: number): void
+}
+
+const MAX_ARTIFACT_BYTES = 256 * 1024
+
+// A uuid-shaped id that is always the same for the same text, for history written before ids existed.
+export function derivedUuid(text: string): string {
+  const hex = createHash('sha256').update(text).digest('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
+export const legacyRunId = (repo: string, design: string, claimedAt: string) => derivedUuid(`run\n${repo}\n${design}\n${claimedAt}`)
+
+function artifactBody(report: PrReport): object {
+  const { worktree: _, ...body } = report
+  if (Buffer.byteLength(JSON.stringify(body)) <= MAX_ARTIFACT_BYTES) return body
+  return { number: report.number, state: report.state, omitted: 'The full report was over 256 KiB, the most marge keeps.' }
 }
 
 export function diskStore(home: string): Store {
   const buildDir = (repo: string) => path.join(home, 'builds', repo.replaceAll('/', '__'))
   const claimFile = (repo: string) => path.join(buildDir(repo), 'claim.json')
   const prFile = (repo: string, number: number) => path.join(buildDir(repo), `pr-${number}.json`)
+  const artifactFile = (id: string) => path.join(home, 'artifacts', `${id}.json`)
+  const eventsFile = path.join(home, 'events.jsonl')
+  const cursorFile = path.join(home, 'sync.json')
   return {
     claimFor(repo) {
       const file = claimFile(repo)
-      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null
+      if (!fs.existsSync(file)) return null
+      const claim = JSON.parse(fs.readFileSync(file, 'utf8'))
+      return { ...claim, runId: claim.runId ?? legacyRunId(claim.repo, claim.design, claim.startedAt) }
     },
     claim(claim) {
       const file = claimFile(claim.repo)
@@ -159,9 +203,32 @@ export function diskStore(home: string): Store {
     savePrReport(repo, report) {
       fs.writeFileSync(prFile(repo, report.number), `${JSON.stringify(report, null, 2)}\n`)
     },
-    record(event) {
+    record(event, report) {
+      const id = randomUUID()
+      if (report) {
+        const artifact: Artifact = { id, kind: 'pr_report', at: event.at, body: artifactBody(report) }
+        fs.mkdirSync(path.dirname(artifactFile(id)), { recursive: true })
+        fs.writeFileSync(artifactFile(id), JSON.stringify(artifact))
+      }
       fs.mkdirSync(home, { recursive: true })
-      fs.appendFileSync(path.join(home, 'events.jsonl'), `${JSON.stringify(event)}\n`)
+      fs.appendFileSync(eventsFile, `${JSON.stringify({ id, ...event, ...(report && { artifactId: id }) })}\n`)
+    },
+    eventLog() {
+      return fs.existsSync(eventsFile) ? fs.readFileSync(eventsFile, 'utf8') : ''
+    },
+    artifact(id) {
+      return fs.existsSync(artifactFile(id)) ? JSON.parse(fs.readFileSync(artifactFile(id), 'utf8')) : null
+    },
+    forgetArtifact(id) {
+      fs.rmSync(artifactFile(id), { force: true })
+    },
+    syncCursor() {
+      return fs.existsSync(cursorFile) ? JSON.parse(fs.readFileSync(cursorFile, 'utf8')).offset : 0
+    },
+    saveSyncCursor(offset) {
+      const temp = `${cursorFile}.tmp`
+      fs.writeFileSync(temp, JSON.stringify({ offset }))
+      fs.renameSync(temp, cursorFile)
     },
   }
 }

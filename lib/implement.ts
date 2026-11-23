@@ -52,7 +52,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
     const evidence = workshop.publishEvidence(gated.worktree, pullRequest.number)
     const opened = { ...gated, pullRequest, ...(evidence && { evidence }) }
     world.store.savePrReport(claim.repo, opened)
-    world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type: 'pr opened' })
+    world.store.record({ repo: claim.repo, design: claim.design, runId: claim.runId, pr: pr.number, at: world.now(), type: 'pr opened' }, opened)
     return watchPr(pr, claim, opened, world, workshop)
   }
   const gate = async (implemented: PrReport): Promise<PrReport> => {
@@ -71,7 +71,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
     return { state: 'stopped', number: pr.number, reason: `PR ${pr.number} still needs attention after ${attempts} attempts: ${previous.problems.join('; ')}. Its work is in ${previous.worktree}.` }
   }
 
-  ensureDiskSpace(world, claim.design)
+  ensureDiskSpace(world, claim)
   const branch = `${branchPrefix(claim.design)}pr-${pr.number}`
   // A PR with no local record may still be merged into the base on GitHub — e.g. the design was abandoned (which
   // wipes the store) and rebuilt, or the store was lost or moved. Its head branch is deleted on merge, so neither the
@@ -93,8 +93,9 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
       if (pr === prs.at(-1) && workshop.designAwaitingDone(claim.design)) {
         return { state: 'stopped', number: pr.number, reason: `Every PR for ${claim.design} is already merged on GitHub (PR ${pr.number}, ${merged.url}), but the design is still in factory/ready. Move it to factory/done on ${claim.base} to finish it.` }
       }
-      world.store.savePrReport(claim.repo, mergedReport(pr.number, branch, merged))
-      world.store.record({ repo: claim.repo, design: claim.design, pr: pr.number, at: world.now(), type: 'pr merged' })
+      const recovered = mergedReport(pr.number, branch, merged)
+      world.store.savePrReport(claim.repo, recovered)
+      world.store.record({ repo: claim.repo, design: claim.design, runId: claim.runId, pr: pr.number, at: world.now(), type: 'pr merged' }, recovered)
       return buildNextPr(prs, claim, world, workshop)
     }
   }
@@ -105,7 +106,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
     throw new Error(`${claim.base} does not hold the finished plan for ${claim.design} that this checkout has. Merge the design there, or abandon and build with the right --base.`)
   }
 
-  const event = { repo: claim.repo, design: claim.design, pr: pr.number }
+  const event = { repo: claim.repo, design: claim.design, runId: claim.runId, pr: pr.number }
   world.store.record({ ...event, at: world.now(), type: 'pr started' })
   const values = { ...designValues(readDesign(worktree, number)), pr_number: String(pr.number), pr_title: pr.title, base: claim.base, branch }
   const prompt = previous && merge
@@ -136,7 +137,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
     implementation,
   }
   world.store.savePrReport(claim.repo, report)
-  world.store.record({ ...event, at: world.now(), type: `pr ${report.state}` })
+  world.store.record({ ...event, at: world.now(), type: `pr ${report.state}` }, report)
   return report.state === 'implemented' ? gate(report) : report
 }
 
