@@ -77,7 +77,7 @@ test('a push carries the status list, the latest state, and the new history with
 })
 
 test('MARGE_API_URL changes where pushes go', async () => {
-  const { pushes } = await run({ env: { ...ENV, MARGE_API_URL: 'http://localhost:8080' } })
+  const { pushes } = await run({ env: { ...ENV, MARGE_API_URL: 'http://localhost:8080/' } })
   assert.equal(pushes[0].url, 'http://localhost:8080/v1/factory/sync')
 })
 

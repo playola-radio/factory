@@ -133,7 +133,7 @@ function nextPush(effects: SyncEffects) {
 }
 
 export async function syncLoop(env: NodeJS.ProcessEnv, effects: SyncEffects, stop: Promise<void>): Promise<void> {
-  const url = env.MARGE_API_URL ?? DEFAULT_URL
+  const url = (env.MARGE_API_URL ?? DEFAULT_URL).replace(/\/+$/, '')
   const token = env.FACTORY_REPORT_TOKEN?.trim()
   if (!token) return effects.log('FACTORY_REPORT_TOKEN is not set, so the factory is not reporting to marge.')
   if (!url) return effects.log('MARGE_API_URL is empty, so the factory is not reporting to marge.')
