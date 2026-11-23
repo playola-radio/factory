@@ -22,6 +22,11 @@ Then, on this machine (neither file is in the repo):
    ```
 2. `~/.factory/env` (optional) — extra environment the agents need (nvm Node, Homebrew Ruby, Java,
    `ANDROID_HOME`, Maestro). `run-watch.sh` sources it before starting the watcher.
+3. `~/.factory/secrets.env` (optional) — `FACTORY_REPORT_TOKEN=<token>`, the same value as marge's
+   `FACTORY_REPORT_TOKEN`. With it, the watcher reports every change, and a heartbeat each minute, to marge's
+   `/factory` page; without it the watcher logs once that it is not reporting and builds as usual. Set
+   `MARGE_API_URL` in `env` to report somewhere other than `https://api.marge.playola.fm` (empty turns it off).
+   Builds and their agents never see the token. Failed reports are logged to `watch.log` and retried each minute.
 
 `install-launchd.sh` and `uninstall-launchd.sh` are both safe to run again.
 

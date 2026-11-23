@@ -81,7 +81,7 @@ function runsUntilStoppedAsync(onResolved: () => void): BuildHandle {
 }
 
 // Drives `watch` for `passes` sleeps, then stops. `startBuild` is the fake under test.
-async function drive(opts: { repos: RepoConfig[]; startBuild: WatchEffects['startBuild']; passes: number }) {
+async function drive(opts: { repos: RepoConfig[]; startBuild: WatchEffects['startBuild']; passes: number; paused?: Map<string, number> }) {
   let stopResolve!: () => void
   const stop = new Promise<void>((r) => { stopResolve = r })
   let passCount = 0
@@ -98,7 +98,7 @@ async function drive(opts: { repos: RepoConfig[]; startBuild: WatchEffects['star
       return Promise.resolve()
     },
   }
-  await watch({ pollSeconds: 1, repos: opts.repos }, effects, stop)
+  await watch({ pollSeconds: 1, repos: opts.repos }, effects, stop, opts.paused)
   return { logs }
 }
 
@@ -121,6 +121,12 @@ test('does not restart a repo after a non-zero exit', async () => {
     passes: 3,
   })
   assert.equal(starts.length, 1)
+})
+
+test('a paused repo is shared with its exit code, so the page can say it stopped', async () => {
+  const paused = new Map<string, number>()
+  await drive({ repos: [{ path: '/a', base: 'develop' }, { path: '/b', base: 'main' }], startBuild: (repo) => exits(repo.path === '/a' ? 2 : 0), passes: 2, paused })
+  assert.deepEqual([...paused], [['/a', 2]])
 })
 
 test('leaves a running build alone across passes', async () => {
@@ -180,6 +186,19 @@ test('stopping a build kills the agents it spawned, not just its own process', a
   await handle.done
   for (let i = 0; i < 100 && alive(grandchild); i++) await delay(10)
   assert.equal(alive(grandchild), false, 'the agent must be killed when the build is stopped')
+})
+
+test('a build never sees the token for reporting to marge', async (t) => {
+  const previous = process.env.FACTORY_REPORT_TOKEN
+  process.env.FACTORY_REPORT_TOKEN = 'secret-token'
+  t.after(() => {
+    if (previous === undefined) delete process.env.FACTORY_REPORT_TOKEN
+    else process.env.FACTORY_REPORT_TOKEN = previous
+  })
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-env-')), 'seen')
+  const handle = spawnTree(process.execPath, ['-e', `require('fs').writeFileSync(${JSON.stringify(out)}, String(process.env.FACTORY_REPORT_TOKEN))`])
+  assert.equal(await handle.done, 0)
+  assert.equal(fs.readFileSync(out, 'utf8'), 'undefined')
 })
 
 test('a sleep is cut short when its signal aborts', async () => {

@@ -11,6 +11,7 @@ import { abandon, acquireLock, finish, realWorld, startOrResume } from '../lib/b
 import { removeDesignWorktrees } from '../lib/cleanup.ts'
 import { buildDesign } from '../lib/implement.ts'
 import { diskStore } from '../lib/store.ts'
+import { realSyncEffects, syncLoop } from '../lib/sync.ts'
 import { loadWatchConfig, realIsGitClone, realWatchEffects, watch } from '../lib/watch.ts'
 import { baseView, realWorkshop } from '../lib/workshop.ts'
 import { designValues, renderPrompt } from '../lib/prompts.ts'
@@ -32,7 +33,9 @@ const USAGE = `Usage:
   factory abandon <repo-path>     give up the design in progress so the next build can start
   factory watch [--config <path>] keep a factory build running for every repo in the config (default
                                   $FACTORY_HOME/watch.json), building new designs unattended until stopped with
-                                  SIGTERM; a repo whose build exits non-zero is left until the watcher restarts
+                                  SIGTERM; a repo whose build exits non-zero is left until the watcher restarts;
+                                  reports every change, and a heartbeat each minute, to marge's /factory page
+                                  (FACTORY_REPORT_TOKEN turns it on; MARGE_API_URL overrides the address)
 
   finalize exits 0 when the plan is finished, 2 when the plan needs fixing, 1 on an error.`
 
@@ -143,7 +146,13 @@ async function main() {
       process.once('SIGTERM', onSignal)
       process.once('SIGINT', onSignal)
     })
-    await watch(config, realWatchEffects(import.meta.filename), stop)
+    const effects = realWatchEffects(import.meta.filename)
+    const paused = new Map<string, number>()
+    const sender = realSyncEffects(HOME, diskStore(HOME), config.repos, paused, effects.sleep, effects.log)
+    await Promise.all([
+      watch(config, effects, stop, paused),
+      syncLoop(process.env, sender, stop).catch((error) => effects.log(`Stopped reporting to marge: ${error.message}`)),
+    ])
     return
   }
   if (command !== 'finalize' || rest.length < 1 || rest.length > 2) throw new Error(USAGE)

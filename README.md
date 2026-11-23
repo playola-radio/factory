@@ -47,3 +47,17 @@ bytes), e.g. `FACTORY_MIN_FREE_GB=40 factory build <repo-path>`.
 
 Under `factory watch`, a non-zero exit pauses that repo until the watcher restarts, so a low-disk refusal
 pauses the repo: free up space, then restart the watcher.
+
+## Reporting to marge
+
+`factory watch` also keeps marge's `/factory` page current (contract: marge-web
+`factory/done/002-factory-overview/ApiContract.md`). It pushes to `POST $MARGE_API_URL/v1/factory/sync`
+(default `https://api.marge.playola.fm`) within five seconds of any new event or a repo pausing, and every minute
+otherwise as a heartbeat. Each push carries the status list, every build in flight (and those finished in the
+last day), the design counts from each repo's base view, and the events and PR reports marge has not accepted
+yet. `$FACTORY_HOME/sync.json` marks how far through `events.jsonl` marge has accepted; PR reports wait in
+`$FACTORY_HOME/artifacts/` until a push carrying them is accepted.
+
+It needs `FACTORY_REPORT_TOKEN` (from `$FACTORY_HOME/secrets.env`, see `deploy/README.md`). Without it, or with
+`MARGE_API_URL` set empty, the watcher logs once and builds without reporting. A push that fails is logged and
+tried again a minute later; it never stops the watcher or a build.
