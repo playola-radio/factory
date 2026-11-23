@@ -644,14 +644,14 @@ test('a review pass that fails once is tried again', async () => {
 })
 
 test('a review pass that hits the codex usage limit is not tried again and says so', async () => {
-  const { report, reviews } = await buildPr({ breaks: ['limited', []] })
+  const { report, reviews } = await buildPr({ breaks: ['limited'] })
   assert.equal(reviews.length, 1)
   assert.equal(gateOf(report).state, 'did not run')
   assert.match(gateOf(report).problems[0], /break-it pass hit the codex usage limit in round 1 — try again after it resets: .*Try again at 3:05 PM/)
 })
 
 test('a review pass turned away for sending too many requests is not tried again either', async () => {
-  const { report, reviews } = await buildPr({ breaks: ['throttled', []] })
+  const { report, reviews } = await buildPr({ breaks: ['throttled'] })
   assert.deepEqual([reviews.length, gateOf(report).problems[0].includes('usage limit')], [1, true])
 })
 
