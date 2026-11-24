@@ -6,7 +6,7 @@ Review the full diff of this branch against `origin/{{base}}` (`git diff origin/
 
 1. **Database excess (zero tolerance):** every new or changed column, table, index, constraint, enum value, and migration line must map to a named spec requirement. Flag anything speculative ("might need it later"), any state derivable from existing data, any denormalized copy, any index with no query that uses it, any column no code reads.
 2. **Code excess:** properties no consumer reads, endpoints or params no client calls, validation duplicated across layers (keep only the layer this codebase's convention uses), abstractions with a single caller, dead branches, speculative generality, config nothing sets.
-3. **Scope excess:** anything the spec never asked for. Deviations that fix plan/spec bugs are fine; deviations that ADD behavior are findings.
+3. **Scope excess:** anything the spec never asked for. Deviations that fix plan/spec bugs are fine; deviations that ADD behavior are findings. A demo stand-in for an outside service this PR calls (a local fake wired into `make demo-env` and listed in `factory/DEMO.md`) is required work, not excess.
 4. **Test excess:** tests asserting nothing, re-testing the same behavior, or building disproportionate fixtures for trivial assertions.
 
 For each finding give `where` (file:line), `delete` (what to DELETE), and `breaks` (what breaks if deleted; "nothing" is the expected answer). Be a hard grader. An empty report is a claim that every line in the diff is load-bearing — only make that claim if it is true.

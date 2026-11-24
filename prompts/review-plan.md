@@ -11,7 +11,7 @@ Someone else wrote the plan below. Try to prove it is wrong. Look for:
 - an endpoint or field the plan uses that is not in `ApiContract.md`, or a stored model change that is not in `ModelChanges.md`;
 - a screen that can be reached in a state neither the design nor the plan settles (a new unsaved item, loading, empty, error or locked);
 - PRs in an order that cannot build, or a PR that would not build or pass tests on its own;
-- anything the plan adds that the design never asked for;
+- anything the plan adds that the design never asked for (a demo stand-in for an outside service is required, not extra);
 - PRs that are trivially small, or one PR too large to review;
 - tests that would not catch the behaviour they claim to cover.
 

@@ -11,7 +11,7 @@ import { readDesign } from '../lib/design.ts'
 import { runGate } from '../lib/gate.ts'
 import { watchPr } from '../lib/review.ts'
 import { recordApprovedPlan } from '../lib/readiness.ts'
-import { buildDesign, buildNextPr, pullRequestTitle } from '../lib/implement.ts'
+import { buildDesign, buildNextPr, DEMO_OFF, pullRequestTitle } from '../lib/implement.ts'
 import { DEFAULT_MODEL } from '../lib/agents.ts'
 import { realWorkshop } from '../lib/workshop.ts'
 import type { BreakFinding, ExcessFinding, MergedPullRequest, PullRequestState, ReviewItem, Workshop } from '../lib/workshop.ts'
@@ -553,6 +553,7 @@ test('building again finishes a PR that needs attention instead of starting it o
   assert.match(prompts[1], /Blocked: no simulator login/)
   assert.match(prompts[1], /built all but the recording/)
   assert.match(prompts[1], /merged in cleanly/)
+  assert.ok(prompts.every((prompt) => prompt.includes(DEMO_OFF)))
 })
 
 test('conflicts with the base branch are handed to the implementer to resolve', async () => {
@@ -570,6 +571,16 @@ test('after three attempts a PR is left for the owner', async () => {
   assert.match(fourth.state === 'stopped' ? fourth.reason : '', /after 3 attempts/)
   assert.equal(prompts.length, 3)
   assert.equal(events().filter((type) => type === 'pr started').length, 3)
+})
+
+const DEMO_OFF_RESULT: Implementation = { ...BLOCKED, blockers: [`${DEMO_OFF} no stand-in for the GitHub App, /v1/reviews answers 503`] }
+
+test('a demo env that does not turn the feature on stops the PR at once instead of retrying', async () => {
+  const { report, build, prompts } = await buildPr({ result: DEMO_OFF_RESULT })
+  assert.equal(report.state, 'stopped')
+  assert.match(report.state === 'stopped' ? report.reason : '', /demo env does not enable this feature: no stand-in for the GitHub App/)
+  assert.equal((await build()).state, 'stopped')
+  assert.equal(prompts.length, 1)
 })
 
 test('an implementer that makes no commits or edits the design needs attention', async () => {

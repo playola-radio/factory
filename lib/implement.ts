@@ -18,6 +18,9 @@ export type PrBuildReport =
   | { state: 'stopped'; number: number; reason: string }
 
 const MAX_ATTEMPTS = 3
+// The blocker an implementer reports when the demo env cannot run the feature it must record. Another attempt cannot
+// fix that without the owner, so the PR stops at once instead of retrying.
+export const DEMO_OFF = 'demo env does not enable this feature:'
 // The progress suffix a PR was opened under; its total is whatever the plan's length was then, so it is dropped before titles are compared.
 const PROGRESS_SUFFIX = / \(PR \d+\/\d+\)$/
 
@@ -69,6 +72,8 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
     return { state: 'stopped', number: pr.number, reason: `PR ${pr.number}'s review gate ended "${previous.gate.state}": ${open.join('; ')}. Its work is in ${previous.worktree}.` }
   }
   const attempts = previous?.attempts ?? (previous ? 1 : 0)
+  const demoStop = previous && demoOff(previous)
+  if (demoStop) return demoStop
   if (previous && attempts >= MAX_ATTEMPTS) {
     return { state: 'stopped', number: pr.number, reason: `PR ${pr.number} still needs attention after ${attempts} attempts: ${previous.problems.join('; ')}. Its work is in ${previous.worktree}.` }
   }
@@ -140,7 +145,14 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
   }
   world.store.savePrReport(claim.repo, report)
   world.store.record({ ...event, at: world.now(), type: `pr ${report.state}` }, report)
-  return report.state === 'implemented' ? gate(report) : report
+  if (report.state === 'implemented') return gate(report)
+  return demoOff(report) ?? report
+}
+
+function demoOff(report: PrReport): PrBuildReport | null {
+  const blocker = report.implementation.blockers.find((text) => text.toLowerCase().startsWith(DEMO_OFF))
+  if (!blocker) return null
+  return { state: 'stopped', number: report.number, reason: `PR ${report.number} cannot record its demo (${blocker}). Give the repo's demo env what it is missing, then abandon and rebuild the design. Its work is in ${report.worktree}.` }
 }
 
 // A stand-in report for a PR found already merged on GitHub with no local record, so the store treats it as done
