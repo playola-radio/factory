@@ -152,7 +152,7 @@ export async function buildNextPr(prs: PlannedPr[], claim: Claim, world: World, 
 function demoOff(report: PrReport): PrBuildReport | null {
   const blocker = report.implementation.blockers.find((text) => text.toLowerCase().startsWith(DEMO_OFF))
   if (!blocker) return null
-  return { state: 'stopped', number: report.number, reason: `PR ${report.number} cannot record its demo: ${blocker.replace(/\.?$/, '.')} Another attempt cannot fix that: give the repo's demo env what it is missing. Its work is in ${report.worktree}.` }
+  return { state: 'stopped', number: report.number, reason: `PR ${report.number} cannot record its demo (${blocker}). Give the repo's demo env what it is missing, then abandon and rebuild the design. Its work is in ${report.worktree}.` }
 }
 
 // A stand-in report for a PR found already merged on GitHub with no local record, so the store treats it as done

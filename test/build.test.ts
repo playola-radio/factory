@@ -553,6 +553,7 @@ test('building again finishes a PR that needs attention instead of starting it o
   assert.match(prompts[1], /Blocked: no simulator login/)
   assert.match(prompts[1], /built all but the recording/)
   assert.match(prompts[1], /merged in cleanly/)
+  assert.ok(prompts.every((prompt) => prompt.includes(DEMO_OFF)))
 })
 
 test('conflicts with the base branch are handed to the implementer to resolve', async () => {
@@ -580,12 +581,6 @@ test('a demo env that does not turn the feature on stops the PR at once instead 
   assert.match(report.state === 'stopped' ? report.reason : '', /demo env does not enable this feature: no stand-in for the GitHub App/)
   assert.equal((await build()).state, 'stopped')
   assert.equal(prompts.length, 1)
-})
-
-test('the implement and finish prompts both name the phrase that stops a PR whose demo is off', async () => {
-  const { build, prompts } = await buildPr({ result: BLOCKED })
-  await build()
-  assert.ok(prompts.every((prompt) => prompt.includes(DEMO_OFF)))
 })
 
 test('an implementer that makes no commits or edits the design needs attention', async () => {

@@ -39,8 +39,8 @@ Run `factory` with no arguments for the full usage. Tests: `npm test`.
 
 ## Demo environment
 
-Every PR that delivers "Done when" items records a video of it working, against the safe demo environment the
-target repo documents in `factory/DEMO.md`: one command (`make demo-env`) that brings the app up, the address to
+Where a repo calls for UX evidence, a PR records its "Done when" items against the safe demo environment the repo
+documents in `factory/DEMO.md`: one command (`make demo-env`) that brings the app up, the address to
 record at, where its data comes from and how to tear it down.
 
 The demo must be able to turn on every feature it records. When a PR makes the app call an outside service (an
