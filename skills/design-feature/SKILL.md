@@ -76,7 +76,7 @@ Export every approved frame as PNG into `screenshots/` (pencil `Export`, absolut
 
 Read the code the design builds on, then write `ImplementationPlan.md` with the owner. Anything the design does not settle is a question for the owner (option A, option B, recommendation), and the answer goes into the design files, not only the plan.
 
-Cut the work into PRs built in order. Each leaves the app building with tests passing and can be reviewed on its own. Avoid tiny PRs: every PR costs a paid review, and one PR for a small design is fine. The plan adds nothing the design does not ask for. It names the base branch and any repo bookkeeping the PR must do.
+Cut the work into PRs built in order. Each leaves the app building with tests passing and can be reviewed on its own. Avoid tiny PRs: every PR costs a paid review, and one PR for a small design is fine. The plan adds nothing the design does not ask for. It names the base branch and any repo bookkeeping the PR must do. A PR that makes the app call an outside service (an LLM, a GitHub App, another company's API) also lists, in its changes, a local demo stand-in for it wired into `make demo-env` and documented in `factory/DEMO.md`, so the demo can turn the feature on.
 
 The factory reads the PRs back out of this file, so keep the layout exactly:
 

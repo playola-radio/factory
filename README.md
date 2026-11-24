@@ -37,6 +37,18 @@ factory abandon <repo-path>    # give up the design in progress
 
 Run `factory` with no arguments for the full usage. Tests: `npm test`.
 
+## Demo environment
+
+Every PR that delivers "Done when" items records a video of it working, against the safe demo environment the
+target repo documents in `factory/DEMO.md`: one command (`make demo-env`) that brings the app up, the address to
+record at, where its data comes from and how to tear it down.
+
+The demo must be able to turn on every feature it records. When a PR makes the app call an outside service (an
+LLM, a GitHub App, another company's API), that PR also ships a local stand-in for it, wires it into
+`make demo-env`, lists it in `factory/DEMO.md`, and makes the bring-up check that the feature's routes answer (not
+503). Before recording, the implementer confirms the feature is on; if the demo cannot turn it on, it reports
+`demo env does not enable this feature: <what is missing>` and the build stops at once instead of retrying.
+
 ## Disk space
 
 `factory build` needs room to work — one two-PR iOS design can use 45–50 GB of worktrees and build output.
