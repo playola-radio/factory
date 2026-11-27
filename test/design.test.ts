@@ -31,6 +31,16 @@ test('refuses a design whose screenshot is never shown in Design.md', () => {
   assert.throws(() => readDesign(repoWith(GOOD, ['a--default.png', 'b--empty.png']), '001'), /never shows.*b--empty/)
 })
 
+const NO_SCREENS = '# 001\n\n## Screens\n\nNone: command-line only.\n\n## Done when\n\n- [ ] first outcome\n'
+
+test('accepts a design with no screenshots when it says it changes no screen', () => {
+  assert.deepEqual(readDesign(repoWith(NO_SCREENS, []), '001').screenshots, [])
+})
+
+test('refuses a design with no screenshots that never says why', () => {
+  assert.throws(() => readDesign(repoWith('# 001\n\n## Done when\n\n- [ ] first outcome\n', []), '001'), /no PNG files.*None:/)
+})
+
 test('refuses a design with no Done when checklist', () => {
   assert.throws(() => readDesign(repoWith('![a](screenshots/a--default.png)\n'), '001'), /Done when/)
 })

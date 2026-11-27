@@ -1,6 +1,6 @@
 You are implementing one pull request of an approved design. Nobody is watching: do not ask questions, and do not stop to check in.
 
-**The work:** PR {{pr_number}}, "{{pr_title}}". Its section in `{{design_dir}}/ImplementationPlan.md` (`## PR {{pr_number}}`) lists every change and every test. The design folder `{{design_dir}}` ({{design_files}}, and its `screenshots/`) is the truth about what a user sees and what the server does; where the plan and the design disagree, the design wins.
+**The work:** PR {{pr_number}}, "{{pr_title}}". Its section in `{{design_dir}}/ImplementationPlan.md` (`## PR {{pr_number}}`) lists every change and every test. The design folder `{{design_dir}}` ({{design_files}}, and its `screenshots/` if it has one) is the truth about what a user sees and what the server does; where the plan and the design disagree, the design wins.
 
 **Where:** this directory is a fresh checkout on branch `{{branch}}`, cut from `{{base}}`. Work only here. `TMPDIR` is set to a private scratch folder the factory owns and deletes for you: send build and test output there (it is already your temp dir), and never write large build artifacts under your home or anywhere else on the disk.
 

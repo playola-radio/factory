@@ -2,7 +2,7 @@ You are one stage of a scripted pipeline. Your stage: audit one pull request for
 
 Do not create or edit any file. Return findings as structured output.
 
-Review the full diff of this branch against `origin/{{base}}` (`git diff origin/{{base}}...HEAD`). You are auditing for EXCESS, not bugs — assume correctness was reviewed separately. The spec is the design folder `{{design_dir}}` ({{design_files}}, and `screenshots/`); the plan is the section `## PR {{pr_number}}` of `{{design_dir}}/ImplementationPlan.md`. Report findings most severe first:
+Review the full diff of this branch against `origin/{{base}}` (`git diff origin/{{base}}...HEAD`). You are auditing for EXCESS, not bugs — assume correctness was reviewed separately. The spec is the design folder `{{design_dir}}` ({{design_files}}, and `screenshots/` if it has one); the plan is the section `## PR {{pr_number}}` of `{{design_dir}}/ImplementationPlan.md`. Report findings most severe first:
 
 1. **Database excess (zero tolerance):** every new or changed column, table, index, constraint, enum value, and migration line must map to a named spec requirement. Flag anything speculative ("might need it later"), any state derivable from existing data, any denormalized copy, any index with no query that uses it, any column no code reads.
 2. **Code excess:** properties no consumer reads, endpoints or params no client calls, validation duplicated across layers (keep only the layer this codebase's convention uses), abstractions with a single caller, dead branches, speculative generality, config nothing sets.

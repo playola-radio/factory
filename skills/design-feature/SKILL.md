@@ -10,7 +10,7 @@ One conversation with the owner that ends in one folder the factory can build wi
 ```text
 factory/ready/<NNN>-<kebab-name>/
   Design.md               always
-  screenshots/            always; <screen>--<state>.png
+  screenshots/            only if a screen is added or changed; <screen>--<state>.png
   ApiContract.md          only if the design calls any endpoint
   ModelChanges.md         only if a stored model changes
   ImplementationPlan.md   written here with the owner, then finished by `factory finalize`
@@ -27,7 +27,7 @@ If the folder already exists and only lacks a finished plan, go to step 8.
 - **Base branch:** the one the owner names (a feature branch such as `feature/recorded-shows`), else the repo default from `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`. Never `main` in a repo whose default is `develop`.
 - **Fresh base:** `git fetch`, tree clean, and the branch is the base or freshly cut from it. If not, stop and say so; never reset, merge or switch on your own. Work on `<author>/design-<name>`.
 - **Backend:** models and endpoints live in the playola monorepo. From another repo, read them at `/Users/brian/playola/playola` and record its `develop` SHA in `Design.md`.
-- **Canvas:** the repo's `design/*.pen`, read and changed only through the pencil MCP, never with file tools. `get_app_state` failing means Pen.app is not running: ask the owner to open it. Never skip the screens silently.
+- **Canvas:** the repo's `design/*.pen`, read and changed only through the pencil MCP, never with file tools. `get_app_state` failing means Pen.app is not running: ask the owner to open it. Never skip the screens silently. A design that adds or changes no screen (a command-line tool, a backend-only change) needs no canvas.
 
 ## 2. Scope one slice
 
@@ -40,6 +40,8 @@ Record in `Design.md`: who uses it, the intent in two sentences, what is out of 
 Only what this slice touches: `docs/context/` feature docs, the backend's `MODEL.md` and `ENDPOINTS.md` files, the current screens on the canvas, and the code those screens run on. If the slice replaces a working screen, read that screen's page, model, service, route and tests first, so proven behaviour is kept on purpose.
 
 ## 4. Screens, one at a time
+
+Skip this step when the design adds or changes no screen; step 7 says how to record that.
 
 Ask how many layout directions to explore (3–4 for something substantial, 1–2 for something small). Then draw one screen, wait for the owner's explicit approval, and only then draw the next. New frames go in a labelled zone on the canvas, following `design/DESIGN_STATUS.md` where the repo has one; reuse existing components.
 
@@ -69,6 +71,8 @@ Write each answer into `Design.md` under `## Decisions`, and correct the screens
 ## 7. Write `Design.md` and export
 
 `Design.md` holds, in order: title `# <NNN> — <Name>`, the step 2 record, `## Screens` (one `###` per screen and state, with its image link `![…](screenshots/<screen>--<state>.png)`, its address, and how it is reached and left), `## Decisions`, and `## Done when`: a `- [ ]` checklist where each line is one outcome a user could check on a device.
+
+When the design adds or changes no screen, `## Screens` is the single line `None: <why>` and there is no `screenshots/` folder; the factory refuses a design with no PNGs that does not say so.
 
 Export every approved frame as PNG into `screenshots/` (pencil `Export`, absolute path, then rename each file to `<screen>--<state>.png`). Every file there must be linked from `Design.md`.
 

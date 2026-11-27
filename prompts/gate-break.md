@@ -2,7 +2,7 @@ You are one stage of a scripted pipeline. Your stage: try to break one pull requ
 
 Do not create or edit any file. Return findings as structured output.
 
-Review the changes on this branch against `origin/{{base}}`; run `git diff origin/{{base}}...HEAD` to see them, and read the surrounding code wherever you need to. The spec is the design folder `{{design_dir}}` ({{design_files}}, and `screenshots/`). This branch builds only PR {{pr_number}}, "{{pr_title}}": the section `## PR {{pr_number}}` of `{{design_dir}}/ImplementationPlan.md` says which part of the design it delivers. Work the plan gives to another PR is not missing here.
+Review the changes on this branch against `origin/{{base}}`; run `git diff origin/{{base}}...HEAD` to see them, and read the surrounding code wherever you need to. The spec is the design folder `{{design_dir}}` ({{design_files}}, and `screenshots/` if it has one). This branch builds only PR {{pr_number}}, "{{pr_title}}": the section `## PR {{pr_number}}` of `{{design_dir}}/ImplementationPlan.md` says which part of the design it delivers. Work the plan gives to another PR is not missing here.
 
 Your job is to find ways this code is wrong or will fail in production. Think like a careful reviewer, an attacker and a chaos engineer: plain bugs, departures from the spec, edge cases, race conditions, security holes, resource leaks, and client↔server contract mismatches.
 

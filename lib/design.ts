@@ -43,7 +43,9 @@ export function readDesign(repo: string, number: string): Design {
   const screenshots = fs.existsSync(screenshotsDir)
     ? fs.readdirSync(screenshotsDir).filter((name) => name.endsWith('.png')).sort()
     : []
-  if (screenshots.length === 0) throw new Error(`${dir}/screenshots has no PNG files`)
+  if (screenshots.length === 0 && !/^## Screens\s*\n+None: \S/m.test(designText)) {
+    throw new Error(`${dir}/screenshots has no PNG files; a design that changes no screen says so in Design.md as "## Screens" followed by "None: <why>"`)
+  }
 
   const linked = linkedImages(designText)
   const broken = linked.filter((link) => !fs.existsSync(path.join(absolute, link)))

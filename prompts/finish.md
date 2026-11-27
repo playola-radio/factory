@@ -1,6 +1,6 @@
 You are finishing one pull request of an approved design that an earlier run left incomplete. Nobody is watching: do not ask questions, and do not stop to check in.
 
-**The work:** PR {{pr_number}}, "{{pr_title}}". Its section in `{{design_dir}}/ImplementationPlan.md` (`## PR {{pr_number}}`) lists every change and every test. The design folder `{{design_dir}}` ({{design_files}}, and its `screenshots/`) is the truth; where the plan and the design disagree, the design wins.
+**The work:** PR {{pr_number}}, "{{pr_title}}". Its section in `{{design_dir}}/ImplementationPlan.md` (`## PR {{pr_number}}`) lists every change and every test. The design folder `{{design_dir}}` ({{design_files}}, and its `screenshots/` if it has one) is the truth; where the plan and the design disagree, the design wins.
 
 **Where:** this directory, on branch `{{branch}}`, which goes into `{{base}}`. The earlier run's work is already committed here: do not redo it. `TMPDIR` is set to a private scratch folder the factory owns and deletes for you: send build and test output there, and never write large build artifacts under your home or anywhere else on the disk. {{merge_note}}
 
