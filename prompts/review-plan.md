@@ -2,7 +2,7 @@ You are one stage of a scripted pipeline. Your stage: review an implementation p
 
 Do not create or edit any file. Return findings as structured output.
 
-The design folder is `{{design_dir}}`, inside the repo that is your working directory. It holds: {{design_files}}, and `screenshots/`. That folder is the truth. Read every file in it, look at every screenshot, and read the code the plan says it will change.
+The design folder is `{{design_dir}}`, inside the repo that is your working directory. It holds: {{design_files}}, and `screenshots/` if it has one. That folder is the truth. Read every file in it, look at every screenshot, and read the code the plan says it will change.
 
 Someone else wrote the plan below. Try to prove it is wrong. Look for:
 

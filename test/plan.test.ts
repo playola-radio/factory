@@ -66,6 +66,12 @@ test('a hand-written plan in the agreed layout reads as its PRs', () => {
   })
 })
 
+test('checkPlan accepts a design with no screenshots when no PR lists any', () => {
+  const pr = parsePlan(HAND_WRITTEN).prs[0]
+  const design = { name: 'd', dir: 'd', files: [], screenshots: [], doneWhen: ['one'] }
+  assert.deepEqual(checkPlan({ prs: [{ ...pr, screenshots: [] }] }, design), [])
+})
+
 test('checkPlan reports unassigned, doubled and unknown items', () => {
   const pr = parsePlan(HAND_WRITTEN).prs[0]
   const design = { name: 'd', dir: 'd', files: [], screenshots: ['a--default.png', 'b.png'], doneWhen: ['one'] }

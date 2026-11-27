@@ -1,6 +1,6 @@
 You are fixing what two reviewers found in one pull request before it is opened. Nobody is watching: do not ask questions, and do not stop to check in.
 
-**The work:** PR {{pr_number}}, "{{pr_title}}", already built and committed in this directory on branch `{{branch}}`, which goes into `{{base}}`. Its section in `{{design_dir}}/ImplementationPlan.md` (`## PR {{pr_number}}`) says what it must do. The design folder `{{design_dir}}` ({{design_files}}, and its `screenshots/`) is the truth. `TMPDIR` is set to a private scratch folder the factory owns and deletes for you: send build and test output there, and never write large build artifacts under your home or anywhere else on the disk.
+**The work:** PR {{pr_number}}, "{{pr_title}}", already built and committed in this directory on branch `{{branch}}`, which goes into `{{base}}`. Its section in `{{design_dir}}/ImplementationPlan.md` (`## PR {{pr_number}}`) says what it must do. The design folder `{{design_dir}}` ({{design_files}}, and its `screenshots/` if it has one) is the truth. `TMPDIR` is set to a private scratch folder the factory owns and deletes for you: send build and test output there, and never write large build artifacts under your home or anywhere else on the disk.
 
 **The findings.** `P0`–`P3` come from a reviewer trying to break the code. `excess` comes from a reviewer trying to delete code.
 
