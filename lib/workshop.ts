@@ -154,7 +154,7 @@ export function realWorkshop(repo: string, repoId: string, worktreesDir: string,
     return runAgent({ vendor: 'claude', model, prompt, schemaFile: schema(schemaName), cwd, runDir, step, canWrite: true, timeoutMs: IMPLEMENT_TIMEOUT_MS, env: { ...AUTHOR_ENV, TMPDIR: tmpdir } })
   }
   const reviewer = (schemaName: string, cwd: string, prompt: string, step: string) =>
-    runAgent({ vendor: 'codex', model: DEFAULT_MODEL.codex, prompt, schemaFile: schema(schemaName), cwd, runDir, step, timeoutMs: REVIEW_TIMEOUT_MS })
+    runAgent({ vendor: 'outside', model: DEFAULT_MODEL.outside, prompt, schemaFile: schema(schemaName), cwd, runDir, step, timeoutMs: REVIEW_TIMEOUT_MS })
   return {
     prepareWorktree(base, branch) {
       const worktree = path.join(worktreesDir, branch.replaceAll('/', '__'))

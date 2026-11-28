@@ -16,7 +16,7 @@ You are implementing one pull request of an approved design. Nobody is watching:
    Save every video and screenshot you record for this PR in `$TMPDIR/evidence/`, and list them in `$TMPDIR/evidence/evidence.json` as `{"files": [{"file": "<path inside evidence/, letters, digits, dots, dashes and underscores only>", "kind": "functional" | "visual", "caption": "<what it shows>"}]}`, each file under 100 MB (re-encode a longer video until it is), in the order a reviewer should see them. The factory posts exactly those files to the pull request; anything saved elsewhere never reaches it. Evidence the repo's own tooling records and publishes (such as `make ux-evidence` cases under `qa/ux/`) stays where that tooling puts it. With no evidence to show, write no manifest.
 6. Commit everything. No `Co-Authored-By` or any other co-sign line in commit messages.
 
-**Not yours:** do not push, open a pull request, run a review gate, call Codex, or edit anything under `factory/` other than `factory/DEMO.md`. The factory does what comes next.
+**Not yours:** do not push, open a pull request, run a review gate, call another AI tool, or edit anything under `factory/` other than `factory/DEMO.md`. The factory does what comes next.
 
 If a step needs something you do not have (a login, a device, a secret), finish everything else, commit it, and list that step under `blockers`. If the plan cannot be built as written, stop and say exactly why under `blockers`.
 

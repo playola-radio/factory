@@ -1,4 +1,4 @@
-export type Vendor = 'claude' | 'codex'
+export type Vendor = 'claude' | 'outside'
 
 export interface Design {
   name: string

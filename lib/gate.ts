@@ -12,7 +12,7 @@ import type { Workshop } from './workshop.ts'
 
 const MAX_ROUNDS = 3
 const SMALL_FIX_LINES = 30
-// Trying again cannot get past a spent codex allowance, and would only hide why the pass failed.
+// Trying again cannot get past a spent outside-model allowance, and would only hide why the pass failed.
 const USAGE_LIMIT = /usage limit|rate[ _]limit|too many requests/i
 
 type Failure = { error: string; limited: boolean }
@@ -31,7 +31,7 @@ async function twice<T>(run: () => Promise<{ findings: T[] }>): Promise<Pass<T>>
 }
 
 const failure = (pass: string, round: number, { error, limited }: Failure) =>
-  limited ? `The ${pass} hit the codex usage limit in round ${round} — try again after it resets: ${error}` : `The ${pass} failed twice in round ${round}: ${error}`
+  limited ? `The ${pass} hit the outside model's usage limit in round ${round} — try again after it resets: ${error}` : `The ${pass} failed twice in round ${round}: ${error}`
 
 export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, world: World, workshop: Workshop): Promise<GateReport> {
   const { worktree } = report
@@ -42,7 +42,7 @@ export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, wor
     pr_title: pr.title,
     base: claim.base,
     branch: report.branch,
-    no_delegation: NO_DELEGATION.codex,
+    no_delegation: NO_DELEGATION.outside,
   }
   const rounds: GateRound[] = []
   const end = (state: GateReport['state'], problems: string[] = []): GateReport => {
@@ -57,7 +57,7 @@ export async function runGate(pr: PlannedPr, claim: Claim, report: PrReport, wor
   const reviewedThisRun = new Set<string>()
   const review = async <T>(head: string, template: string, run: (prompt: string) => Promise<{ findings: T[] }>): Promise<Pass<T>> => {
     const prompt = renderPrompt(template, values)
-    const key = createHash('sha256').update([head, template, DEFAULT_MODEL.codex, prompt].join('\n')).digest('hex')
+    const key = createHash('sha256').update([head, template, DEFAULT_MODEL.outside, prompt].join('\n')).digest('hex')
     const kept = reviewedThisRun.has(key) ? null : world.store.gatePass<T>(claim.repo, key)
     reviewedThisRun.add(key)
     if (kept) {

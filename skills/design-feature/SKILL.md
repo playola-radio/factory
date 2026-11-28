@@ -120,7 +120,7 @@ Titles start with `feature:`, `bugfix:` or `chore:` and use no code names. Every
 When the owner is happy with the plan, run this and wait for it; the review takes several minutes:
 
 ```bash
-factory finalize "$(git rev-parse --show-toplevel)" <NNN> --author <claude|codex, whichever you are>
+factory finalize "$(git rev-parse --show-toplevel)" <NNN> --author <claude|outside: claude if you are Claude, otherwise outside>
 ```
 
 It checks the file's shape for free, has the other vendor review the plan against the design and the code, and marks the plan finished.
