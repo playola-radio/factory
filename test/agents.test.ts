@@ -103,3 +103,38 @@ test('a running agent keeps its trace file fresh, so the auto-updater does not t
   assert.ok(fs.statSync(traceFile).mtimeMs > longAgo.getTime() + 30 * 60 * 1000)
   await assert.rejects(run)
 })
+
+test('a successful outside-voice run receives the tier, schema, and prompt and returns the JSON written to -o', async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-agents-'))
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }))
+  const binDir = path.join(tmp, 'bin')
+  const runDir = path.join(tmp, 'run')
+  const schemaFile = path.join(tmp, 'schema.json')
+  fs.mkdirSync(binDir)
+  fs.writeFileSync(
+    path.join(binDir, 'outside-voice'),
+    `#!/bin/sh
+set -e
+[ "$1" = "--tier" ] && [ "$2" = "heavy" ]
+[ "$3" = "--schema" ] && [ "$4" = "${schemaFile}" ]
+[ "$5" = "-o" ]
+[ "$7" = "-" ]
+prompt=$(cat)
+[ "$prompt" = "hello" ]
+printf '{"ok":true,"summary":"looks good"}\\n' > "$6"
+`,
+    { mode: 0o755 },
+  )
+
+  const result = await runAgent({
+    vendor: 'outside',
+    runDir,
+    step: 'success',
+    model: 'heavy',
+    prompt: 'hello',
+    schemaFile,
+    cwd: tmp,
+    env: { PATH: `${binDir}:${process.env.PATH ?? ''}` },
+  })
+  assert.deepEqual(result, { ok: true, summary: 'looks good' })
+})
