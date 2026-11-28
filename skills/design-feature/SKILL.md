@@ -18,7 +18,7 @@ factory/ready/<NNN>-<kebab-name>/
 
 No application code is written here. The folder is the truth: every decision made in chat is written into it before moving on.
 
-`factory status <repo>` names anything wrong with a folder's shape or plan; run it whenever unsure. If `factory` is not on the PATH, run `./install.sh` in `~/playola/factory` to put it there.
+`factory status <repo>` names anything wrong with a folder's shape or plan; run it whenever unsure. If `factory` is not on the PATH, run `./install.sh` in `~/playola/factory`, then run `export PATH="$HOME/.local/bin:$PATH"` in the shell where you will use `factory`.
 
 If the folder already exists and only lacks a finished plan, go to step 8.
 
