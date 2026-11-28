@@ -15,7 +15,9 @@ place in the plan, e.g. `chore: fetch the changes (PR 2/5)`; a single-PR plan's 
 
 ## Install
 
-Needs Node 24+, `git`, the GitHub CLI (`gh`), and both the `claude` and `codex` CLIs.
+Needs Node 24+, `git`, the GitHub CLI (`gh`), the `claude` CLI, and `outside-voice` (installed from
+[ai-skills](https://github.com/playola-radio/ai-skills)). The reviewing agent runs on whichever provider
+`~/.config/outside-voice.conf` names.
 
 ```bash
 git clone https://github.com/playola-radio/factory.git

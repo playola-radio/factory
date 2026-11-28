@@ -111,7 +111,7 @@ export function realIsGitClone(repoPath: string): boolean {
 }
 
 // Runs a command in its own process group (`detached`), so stop() can signal the whole tree — a `factory build`
-// launches `claude`/`codex` as its own children and does not forward signals, so killing only the build's node
+// launches `claude`/`outside-voice` as its own children and does not forward signals, so killing only the build's node
 // process would orphan the agent and let it keep editing the worktree while the next build resumes it.
 // The marge report token stays with the watcher; builds and the agents they run never need it.
 export function spawnTree(command: string, args: string[]): BuildHandle {
