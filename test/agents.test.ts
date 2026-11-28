@@ -28,7 +28,6 @@ test('timed-out agent call kills the whole process group including grandchildren
   const schemaFile = path.join(tmp, 'schema.json')
   const pidFile = path.join(tmp, 'grandchild.pid')
   fs.mkdirSync(binDir, { recursive: true })
-  fs.writeFileSync(schemaFile, '{}')
 
   const fakeOutside = path.join(binDir, 'outside-voice')
   fs.writeFileSync(
