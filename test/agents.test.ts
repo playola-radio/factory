@@ -75,3 +75,32 @@ wait
     fs.rmSync(tmp, { recursive: true, force: true })
   }
 })
+
+test('a running agent keeps its trace file fresh, so the auto-updater does not take it for idle', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-agents-'))
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }))
+  const binDir = path.join(tmp, 'bin')
+  const runDir = path.join(tmp, 'run')
+  fs.mkdirSync(binDir)
+  fs.writeFileSync(path.join(binDir, 'outside-voice'), '#!/bin/sh\nsleep 1\nexit 1\n', { mode: 0o755 })
+
+  const run = runAgent({
+    vendor: 'outside',
+    runDir,
+    step: 'quiet',
+    model: 'heavy',
+    prompt: 'hello',
+    schemaFile: path.join(tmp, 'schema.json'),
+    cwd: tmp,
+    env: { PATH: `${binDir}:${process.env.PATH ?? ''}` },
+  })
+  const traceFile = path.join(runDir, 'traces', 'quiet.jsonl')
+  await new Promise((r) => setTimeout(r, 200))
+  const longAgo = new Date(Date.now() - 60 * 60 * 1000)
+  fs.utimesSync(traceFile, longAgo, longAgo)
+  t.mock.timers.tick(30_000)
+  await new Promise((r) => setTimeout(r, 100))
+  assert.ok(fs.statSync(traceFile).mtimeMs > longAgo.getTime() + 30 * 60 * 1000)
+  await assert.rejects(run)
+})

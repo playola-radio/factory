@@ -4,6 +4,9 @@ import path from 'node:path'
 import type { Vendor } from './types.ts'
 
 const STAGE_TIMEOUT_MS = 30 * 60 * 1000
+// deploy/auto-update.sh takes a run whose trace files stop changing for two minutes as idle, and outside-voice
+// writes nothing until it ends, so a running agent touches its trace file this often.
+const TRACE_HEARTBEAT_MS = 30 * 1000
 
 export const OTHER_VENDOR: Record<Vendor, Vendor> = { claude: 'outside', outside: 'claude' }
 // For the outside vendor the "model" is an outside-voice tier; the provider and model live in its config.
@@ -34,15 +37,12 @@ const runningChildren = new Set<ChildProcess>()
 let signalsRegistered = false
 
 function killChildGroup(child: ChildProcess): void {
-  if (child.pid) {
-    try {
-      process.kill(-child.pid, 'SIGKILL')
-      return
-    } catch {
-      // Fall back to killing the direct child if process-group signaling fails.
-    }
+  if (child.pid === undefined) return
+  try {
+    process.kill(-child.pid, 'SIGKILL')
+  } catch {
+    // Already gone.
   }
-  child.kill('SIGKILL')
 }
 
 function registerSignalHandlers(): void {
@@ -54,6 +54,7 @@ function registerSignalHandlers(): void {
   }
   process.on('SIGINT', handleSignal(130))
   process.on('SIGTERM', handleSignal(143))
+  process.on('SIGHUP', handleSignal(129))
 }
 
 function runProcess(command: string, args: string[], { cwd, prompt, traceFile, timeoutMs = STAGE_TIMEOUT_MS, env }: StageCall): Promise<string> {
@@ -62,6 +63,7 @@ function runProcess(command: string, args: string[], { cwd, prompt, traceFile, t
     const child = spawn(command, args, { cwd, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
     runningChildren.add(child)
     const trace = fs.createWriteStream(traceFile, { flags: 'a' })
+    const heartbeat = setInterval(() => fs.utimes(traceFile, new Date(), new Date(), () => {}), TRACE_HEARTBEAT_MS)
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => {
@@ -76,12 +78,14 @@ function runProcess(command: string, args: string[], { cwd, prompt, traceFile, t
     }, timeoutMs)
     child.on('error', (err) => {
       clearTimeout(timer)
+      clearInterval(heartbeat)
       runningChildren.delete(child)
       trace.end()
       reject(err)
     })
     child.on('close', (code, signal) => {
       clearTimeout(timer)
+      clearInterval(heartbeat)
       runningChildren.delete(child)
       trace.end()
       if (code === 0) resolve(stdout)
@@ -110,7 +114,7 @@ async function runOutside(call: StageCall): Promise<unknown> {
   const lastMessageFile = call.traceFile.replace(/\.jsonl$/, '.last-message.json')
   await runProcess(
     'outside-voice',
-    ['--tier', call.model, '--schema', call.schemaFile, '-o', lastMessageFile, ...(call.canWrite ? ['--write'] : []), '-'],
+    ['--tier', call.model, '--schema', call.schemaFile, '-o', lastMessageFile, '-'],
     call,
   )
   return JSON.parse(fs.readFileSync(lastMessageFile, 'utf8'))
